@@ -6,6 +6,7 @@ the regime-free prefactor, which is what the engines consume."""
 import math
 import cmath
 import numpy as np
+import scipy.sparse as sp
 from ._engine import models as _m
 from ._engine import quantlib_models as _q
 from ._engine.fastswitch import ExpSum, Cheb
@@ -193,3 +194,43 @@ class SwitchingG2(SwitchingModel):
         # phi absorbs the averaged variance term so that the averaged model reproduces the curve: P = D(t) e^{-int cov_bar} a
         pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
         return g, gfuncs, pre
+
+
+# ---------------------------------------------------------------- operator form for the first-order tier
+def _bs_operators(self, instrument, n, width):
+    """Log-price grid; L_bar = (r - q - s2bar/2) d_x + s2bar/2 d_xx - r; the switched sigma^2 multiplies A = (d_xx - d_x)/2."""
+    from .firstorder import Grid1D
+    T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
+    s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
+    L = width or 8 * math.sqrt(max(s2) * T) + 2 * abs(self.r - self.q) * T
+    x0 = math.log(self.S0); grid = Grid1D(x0 - L, x0 + L, n)
+    D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr")
+    A = 0.5 * (D2 - D1)
+    Lbar = (self.r - self.q) * D1 + s2bar * A - self.r * I
+    S = np.exp(grid.x); u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+    return Lbar, [A], [s2], grid, u0, x0
+
+
+SwitchingBlackScholesProcess.operators = _bs_operators
+
+
+class SwitchingCEVProcess(SwitchingModel):
+    """dS = (r - q) S dt + sigma_y S^beta dW (QuantLib CEV process parameters S0, r, q, sigma, beta); sigma switches.
+    Non-affine: the switched sigma^2 multiplies A = S^{2 beta} d_SS / 2, which does not commute with the drift."""
+    def __init__(self, chain, S0, r, q, sigma, beta):
+        super().__init__(chain)
+        self.S0, self.r, self.q, self.beta = float(S0), float(r), float(q), float(beta)
+        self.sigma = _per_regime(sigma, self.n)
+
+    def operators(self, instrument, n, width):
+        from .firstorder import Grid1D
+        T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
+        s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
+        vol_eff = math.sqrt(max(s2)) * self.S0 ** (self.beta - 1)
+        L = width or 6 * vol_eff * math.sqrt(T) * self.S0 + 2 * abs(self.r - self.q) * T * self.S0
+        grid = Grid1D(max(self.S0 - L, 1e-8), self.S0 + L, n)
+        D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
+        A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
+        Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I
+        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        return Lbar, [A], [s2], grid, u0, self.S0

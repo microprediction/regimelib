@@ -44,7 +44,27 @@ Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a 
 
 `ZeroCouponBond(T, regimeAtMaturity=j)` pays only if the regime at maturity is j; the parts sum to the plain bond and the expansion carries the order-zero initial layer this needs.
 
-Roadmap: two-name credit; the first-order general engine for models whose reduction is not exact (correlated Heston-Hull-White, switched vol-of-vol); options under G2 and Hull-White.
+## The first-order tier
+
+Models whose switched parameter multiplies an operator, so the state does not factor out, are priced to first order
+in the holding time by `FirstOrderFDEngine(model, regime, n)`: one matrix exponential of the augmented system
+`[[L_bar, 0], [K A A, L_bar]]` on a finite-difference grid gives the averaged price and the Duhamel correction, plus
+the regime-memory term; `averaged`, `correction` and `memory` are set after `NPV()`. `SwitchingFDReferee` solves
+the switching model on the same grid without expansion. `DESIGN.md` gives the rule and the certificates.
+
+| QuantLib | regimelib | switches |
+|---|---|---|
+| `AnalyticCEVEngine` / CEV process | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` | `sigma` |
+
+`SwitchingBlackScholesProcess` also has the operator form, and the finite-difference first-order term agrees with the
+exact engine's first-order term there: that check is the certificate for the operator machinery.
+
+Analytic greeks: `engine.greeks(instrument)` gives spot delta and gamma for options, vega in `v0` for Heston and
+Bates, and `r0` delta and gamma for bonds under Vasicek and CIR, by differentiating the formulas rather than bumping.
+
+Roadmap: Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
+correlated Heston-Hull-White with a switched rate level; two-name credit; options under G2 and Hull-White; greeks in
+model parameters from the closed forms.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
 [microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.
