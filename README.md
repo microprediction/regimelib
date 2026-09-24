@@ -3,15 +3,15 @@
 QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion of
 [homogenization.microprediction.org](https://homogenization.microprediction.org).
 
-Each class mirrors a QuantLib class and takes the same parameters. A parameter that switches with the regime is
+Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it
 mirrors; that is a test (`tests/test_quantlib_limit.py`), checked to about 1e-9.
 
 ```python
 import regimelib as rl
-chain = rl.RegimeChain.twoState(20.0, 30.0)          # switching rates, per year
+chain = rl.RegimeChain([[-20, 15, 5], [10, -30, 20], [8, 12, -20]])  # any generator; rates per year
 model = rl.SwitchingHestonModel(chain, S0=100, r=0.02, q=0.0, v0=0.04, kappa=1.5,
-                                theta=[0.09, 0.02], sigma=0.4, rho=-0.6)   # long-run variance switches
+                                theta=[0.09, 0.05, 0.02], sigma=0.4, rho=-0.6)   # long-run variance switches
 opt = rl.VanillaOption(("call", 100.0), maturity=1.0)
 opt.setPricingEngine(rl.FastSwitchingEngine(model, order=4, regime=0))    # expansion in the mean holding time
 print(opt.NPV())
@@ -36,7 +36,8 @@ print(opt.NPV())
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
-with the initial layer; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
+with the initial layer; `order=None` adds terms until successive orders agree to `tol` or the series stops improving
+(`orderUsed` and `lastIncrement` are set after `NPV()`); `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
 options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
 
 Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a grid-free referee that samples regime paths exactly and prices each path in closed form (Vasicek bonds, Black-Scholes options), with `standardError` set after `NPV()`.

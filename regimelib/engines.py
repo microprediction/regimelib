@@ -89,15 +89,41 @@ class SwitchingEngine:
         return int(min(4000, max(self.nodes, 2 * U * (1 + abs(k)))))
 
 class FastSwitchingEngine(SwitchingEngine):
-    def __init__(self, model, order=4, regime=0, nodes=96):
+    """order: an integer, or None to add terms until successive orders agree to `tol` (relative) or the next term
+    stops shrinking, the best truncation of an asymptotic series. `maxOrder` bounds the search. After calculate(),
+    `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
+    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12):
         super().__init__(model, regime, nodes)
-        self.order = order
+        self.order, self.tol, self.maxOrder = order, tol, maxOrder
+        self.orderUsed = self.lastIncrement = None
 
     def _a(self, g, gfuncs, T, a0=None):
-        return FastSwitch(self.model.chain.generator, g, order=self.order, a0=a0).a(T, self.order)[self.regime]
+        fs = FastSwitch(self.model.chain.generator, g, order=self._order(), a0=a0)
+        return fs.a(T, self._order())[self.regime]
 
     def _order(self):
-        return self.order
+        return self.order if self.order is not None else self.maxOrder
+
+    def calculate(self, instrument):
+        if self.order is not None:
+            self.orderUsed = self.order; return super().calculate(instrument)
+        prev, prev_inc = None, None
+        for n in range(0, self.maxOrder + 1):
+            self.order = n
+            try:
+                v = super().calculate(instrument)
+            finally:
+                self.order = None
+            if prev is not None:
+                inc = abs(v - prev) / max(abs(v), 1e-300)
+                if inc <= self.tol or (prev_inc is not None and inc > prev_inc):
+                    # converged, or the terms have started to grow: keep the best truncation
+                    self.orderUsed, self.lastIncrement = (n if inc <= self.tol else n - 1), min(inc, prev_inc or inc)
+                    return v if inc <= self.tol else prev
+                prev_inc = inc
+            prev = v
+        self.orderUsed, self.lastIncrement = self.maxOrder, prev_inc
+        return prev
 
 
 class NumericalSwitchingEngine(SwitchingEngine):
