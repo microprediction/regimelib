@@ -30,6 +30,7 @@ print(opt.NPV())
 | `VarianceGammaProcess` | `SwitchingVarianceGammaProcess(chain, S0, r, q, sigma, nu, theta)` | all three |
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 | `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
+| `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
 | `Vasicek.discountBondOption(type, K, T, S)` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` | `b`, `sigma` |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
@@ -42,7 +43,7 @@ Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a 
 
 `ZeroCouponBond(T, regimeAtMaturity=j)` pays only if the regime at maturity is j; the parts sum to the plain bond and the expansion carries the order-zero initial layer this needs.
 
-Roadmap: two-factor Gaussian and credit models.
+Roadmap: two-name credit; the first-order general engine for models whose reduction is not exact (correlated Heston-Hull-White, switched vol-of-vol); options under G2 and Hull-White.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
 [microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.

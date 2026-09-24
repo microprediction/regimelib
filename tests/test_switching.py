@@ -28,3 +28,9 @@ def test_heston_orders_converge():
     e = _errors(lambda c: rl.SwitchingHestonModel(c, 100.0, 0.01, 0.0, 0.04, 1.5, [0.09, 0.02], 0.4, -0.5, ), rl.VanillaOption(("call", 100.0), maturity=1.0), orders=(0, 1, 2))
     for lam in e:
         assert e[lam][0] > e[lam][1] > e[lam][2]
+
+
+def test_g2_orders_converge():
+    e = _errors(lambda c: rl.SwitchingG2(c, 0.03, 0.5, [0.015, 0.005], 0.1, [0.01, 0.004], [-0.5, 0.2]), rl.ZeroCouponBond(5.0))
+    for lam in e:
+        assert e[lam][0] > e[lam][1] > e[lam][2] > e[lam][3]

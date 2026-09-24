@@ -128,3 +128,13 @@ def test_hull_white_switching_converges():
         bond.setPricingEngine(rl.FastSwitchingEngine(model, order=o)); errs.append(abs(bond.NPV() - ref_npv))
     assert errs[0] > errs[1] > errs[2] > errs[3]
     assert errs[0] > 1e-6                                   # the switching correction is visible at order 0
+
+
+def test_g2_matches_quantlib():
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    ts = ql.YieldTermStructureHandle(ql.FlatForward(ref, 0.03, ql.Actual365Fixed()))
+    a, s, b, e, rho, T = 0.5, 0.01, 0.1, 0.008, -0.3, 4.0
+    g2 = ql.G2(ts, a, s, b, e, rho)
+    bond = rl.ZeroCouponBond(T); bond.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingG2(CHAIN, ts, a, s, b, e, rho), order=2))
+    assert bond.NPV() == pytest.approx(ts.discount(T), rel=1e-10)
+    assert bond.NPV() == pytest.approx(g2.discountBond(0.0, T, [0.0, 0.0]), rel=1e-9)

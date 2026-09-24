@@ -164,3 +164,32 @@ class SwitchingHullWhite(SwitchingModel):
         int_shift = s2bar / (2 * a * a) * (T - 2 * (1 - math.exp(-a * T)) / a + (1 - math.exp(-2 * a * T)) / (2 * a))
         pre = lambda t: self.discount(t) * math.exp(-int_shift if t == T else -(s2bar / (2 * a * a)) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a)))
         return g, gfuncs, pre
+
+
+class SwitchingG2(SwitchingModel):
+    """QuantLib G2(termStructure, a, sigma, b, eta, rho): r = x + y + phi(t), dx = -a x dt + sigma dW1,
+    dy = -b y dt + eta dW2, corr rho, phi(t) fitted to the initial curve. sigma, eta and rho may switch; phi is fitted
+    with the stationary-average covariance, so with every regime equal the model is QuantLib's."""
+    def __init__(self, chain, termStructure, a, sigma, b, eta, rho):
+        super().__init__(chain)
+        self.a, self.b = float(a), float(b)
+        self.sigma, self.eta, self.rho = _per_regime(sigma, self.n), _per_regime(eta, self.n), _per_regime(rho, self.n)
+        if np.isscalar(termStructure):
+            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+        elif hasattr(termStructure, "discount"):
+            ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
+        else:
+            self.discount = termStructure
+
+    def bondForcing(self, T):
+        a, b = self.a, self.b; pi = self.chain.stationaryDistribution()
+        Bx, By = ExpSum({0: 1 / a, a: -1 / a}), ExpSum({0: 1 / b, b: -1 / b})
+        g, cov_bar = [], ExpSum()
+        for i in range(self.n):
+            s, e, r = self.sigma[i], self.eta[i], self.rho[i]
+            gi = (Bx * Bx).scale(0.5 * s * s) + (By * By).scale(0.5 * e * e) + (Bx * By).scale(r * s * e)
+            g.append(gi); cov_bar = cov_bar + gi.scale(pi[i])
+        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        # phi absorbs the averaged variance term so that the averaged model reproduces the curve: P = D(t) e^{-int cov_bar} a
+        pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
+        return g, gfuncs, pre
