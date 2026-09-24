@@ -98,3 +98,33 @@ def test_vasicek_bond_option_matches_quantlib():
         assert opt.NPV() == pytest.approx(model.discountBondOption(qtype, K, T, S), rel=1e-8)
         opt.setPricingEngine(rl.FastSwitchingEngine(ours_model, order=2))
         assert opt.NPV() == pytest.approx(model.discountBondOption(qtype, K, T, S), rel=1e-8)
+
+
+def test_hull_white_matches_quantlib_and_dates():
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    a, s = 0.5, 0.012
+    ts = ql.YieldTermStructureHandle(ql.ZeroCurve([ref, ref + ql.Period(2, ql.Years), ref + ql.Period(10, ql.Years)],
+                                                  [0.02, 0.03, 0.035], ql.Actual365Fixed()))
+    hw = ql.HullWhite(ts, a, s)
+    model = rl.SwitchingHullWhite(CHAIN, ts, a, s)
+    T = ref + ql.Period(4, ql.Years)                       # a QuantLib Date as the maturity
+    bond = rl.ZeroCouponBond(T); bond.setPricingEngine(rl.FastSwitchingEngine(model, order=2))
+    t = ql.Actual365Fixed().yearFraction(ref, T)
+    assert bond.NPV() == pytest.approx(ts.discount(t), rel=1e-10)
+    assert bond.NPV() == pytest.approx(hw.discountBond(0.0, t, model.r0), rel=1e-8)
+    ex = ql.EuropeanExercise(ref + ql.Period(1, ql.Years))
+    opt = rl.VanillaOption(ql.PlainVanillaPayoff(ql.Option.Call, 100.0), ex)   # maturity taken from the exercise
+    assert opt.maturity == pytest.approx(ql.Actual365Fixed().yearFraction(ref, ex.lastDate()))
+
+
+def test_hull_white_switching_converges():
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    chain = rl.RegimeChain.twoState(20.0, 30.0)
+    model = rl.SwitchingHullWhite(chain, 0.03, 0.5, [0.02, 0.005])
+    bond = rl.ZeroCouponBond(5.0)
+    bond.setPricingEngine(rl.NumericalSwitchingEngine(model)); ref_npv = bond.NPV()
+    errs = []
+    for o in (0, 1, 2, 3):
+        bond.setPricingEngine(rl.FastSwitchingEngine(model, order=o)); errs.append(abs(bond.NPV() - ref_npv))
+    assert errs[0] > errs[1] > errs[2] > errs[3]
+    assert errs[0] > 1e-6                                   # the switching correction is visible at order 0

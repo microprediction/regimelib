@@ -130,3 +130,37 @@ class SwitchingVarianceGammaProcess(SwitchingModel):
     def returnForcing(self, u, T):
         g, gfuncs = _q.variance_gamma(u, self.sigma, self.nu, self.theta)
         return g, gfuncs, (lambda: 1.0)
+
+
+class SwitchingHullWhite(SwitchingModel):
+    """QuantLib HullWhite(termStructure, a, sigma): dr = (theta(t) - a r) dt + sigma dW with theta(t) fitted to the
+    initial curve. sigma may switch. theta(t) is fitted with the stationary-average variance, so with every regime
+    equal the model is QuantLib's and reproduces the curve exactly; with switching, the averaged model reproduces the
+    curve and the expansion adds the switching corrections. termStructure: a flat rate, a callable t -> discount factor,
+    or a QuantLib YieldTermStructureHandle (times in years from its reference date)."""
+    def __init__(self, chain, termStructure, a, sigma):
+        super().__init__(chain)
+        self.a = float(a); self.sigma = _per_regime(sigma, self.n)
+        if np.isscalar(termStructure):
+            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+        elif hasattr(termStructure, "discount"):
+            ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
+        else:
+            self.discount = termStructure
+        if hasattr(termStructure, "forwardRate"):               # QuantLib's own instantaneous forward at 0
+            import QuantLib as ql
+            self.r0 = float(termStructure.forwardRate(0.0, 0.0, ql.Continuous).rate())
+        else:
+            self.r0 = -math.log(self.discount(1e-6)) / 1e-6      # instantaneous forward at 0
+
+    def bondForcing(self, T):
+        a = self.a; pi = self.chain.stationaryDistribution()
+        s2bar = float(pi @ np.asarray(self.sigma) ** 2)
+        # r = x + phi(t), dx = -a x dt + sigma dW, x0 = 0; phi = f(0,t) + s2bar (1 - e^{-a t})^2 / (2 a^2)
+        # P(0,T) = exp(-int phi) a_i(T) with g_i = sigma_i^2 B^2 / 2, B = (1 - e^{-a t}) / a
+        B = ExpSum({0: 1 / a, a: -1 / a})
+        g = [(B * B).scale(0.5 * s * s) for s in self.sigma]
+        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        int_shift = s2bar / (2 * a * a) * (T - 2 * (1 - math.exp(-a * T)) / a + (1 - math.exp(-2 * a * T)) / (2 * a))
+        pre = lambda t: self.discount(t) * math.exp(-int_shift if t == T else -(s2bar / (2 * a * a)) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a)))
+        return g, gfuncs, pre

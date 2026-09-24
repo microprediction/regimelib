@@ -29,16 +29,16 @@ print(opt.NPV())
 | `BatesModel` | `SwitchingBatesModel(chain, S0, r, q, v0, kappa, theta, sigma, rho, jumpIntensity, logJumpMean, logJumpVol)` | `theta`, `jumpIntensity` |
 | `VarianceGammaProcess` | `SwitchingVarianceGammaProcess(chain, S0, r, q, sigma, nu, theta)` | all three |
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
+| `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
 | `Vasicek.discountBondOption(type, K, T, S)` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` | `b`, `sigma` |
 
-Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples; times are in years.
+Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
 with the initial layer; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
 options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
 
-Roadmap: two-factor
-Gaussian and credit models; QuantLib dates and day counters; Monte Carlo referee with exact regime paths.
+Roadmap: Monte Carlo referee with exact regime paths; regime-conditional payoffs; two-factor Gaussian and credit models.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
 [microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.
