@@ -59,28 +59,73 @@ class SwitchingEngine:
         return None
 
     def _vanilla(self, opt):
-        """Lewis (2001): C = e^{-rT} [F - sqrt(F K) / pi int_0^inf Re(e^{i u k} phi(u - i/2)) / (u^2 + 1/4) du]."""
+        return self._vanillaAll(opt)["value"]
+
+    def _vanillaAll(self, opt):
+        """Lewis (2001): C = e^{-rT} [F - sqrt(F K) / pi int_0^inf Re(e^{i u k} phi(u - i/2)) / (u^2 + 1/4) du],
+        k = ln(F/K). Differentiating in F puts (1/2 + i u) under the integral for delta and -(u^2 + 1/4) for gamma;
+        differentiating in v0 puts the Riccati coefficient D(T) there for models with phi = exp(D v0) a."""
         m, T, K = self.model, opt.maturity, opt.strike
-        F = m.forward(T); k = math.log(F / K)
+        F = m.forward(T); k = math.log(F / K); dF = F / m.S0
         U = self._frequencyLimit(T, k)
         us, ws = _gauss(U, self._nodeCount(U, k))
-        tot = 0.0
+        I0 = I1 = I2 = Iv = 0.0
         for u, w in zip(us, ws):
             g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
-            phi = pre() * self._a(g, gfuncs, T)
-            tot += w * (cmath.exp(1j * u * k) * phi).real / (u * u + 0.25)
-        call = math.exp(-m.r * T) * (F - math.sqrt(F * K) / math.pi * tot)
-        return call if opt.isCall else call - math.exp(-m.r * T) * (F - K)
+            a = self._a(g, gfuncs, T); phi = pre() * a
+            e = cmath.exp(1j * u * k) * phi
+            I0 += w * e.real / (u * u + 0.25)
+            I1 += w * ((0.5 + 1j * u) * e).real / (u * u + 0.25)
+            I2 += w * e.real
+            if hasattr(m, "v0"):
+                Iv += w * (e * self._riccatiD(m, u - 0.5j, T)).real / (u * u + 0.25)
+        disc = math.exp(-m.r * T); root = math.sqrt(F * K)
+        call = disc * (F - root / math.pi * I0)
+        delta = disc * dF * (1 - root / (math.pi * F) * I1)
+        gamma = disc * dF * dF * root / (math.pi * F * F) * I2
+        out = dict(value=call, delta=delta, gamma=gamma)
+        if hasattr(m, "v0"):
+            out["vega0"] = -disc * root / math.pi * Iv
+        if not opt.isCall:                                    # put-call parity: P = C - e^{-rT} (F - K)
+            out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
+        return out
+
+    @staticmethod
+    def _riccatiD(m, u, T):
+        """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates)."""
+        d = cmath.sqrt((m.rho * m.sigma * 1j * u - m.kappa) ** 2 + m.sigma ** 2 * (1j * u + u * u))
+        gm = (m.kappa - m.rho * m.sigma * 1j * u - d) / (m.kappa - m.rho * m.sigma * 1j * u + d)
+        e = cmath.exp(-d * T)
+        return (m.kappa - m.rho * m.sigma * 1j * u - d) / m.sigma ** 2 * (1 - e) / (1 - gm * e)
+
+    def greeks(self, instrument):
+        """Analytic sensitivities: options give delta and gamma in the spot, and vega0 (in v0) for Heston and Bates;
+        bonds under Vasicek and CIR give delta and gamma in r0. Differentiation is done on the formula, not by bumping."""
+        m = self.model
+        if isinstance(instrument, VanillaOption):
+            out = self._vanillaAll(instrument); out.pop("value"); return out
+        if isinstance(instrument, ZeroCouponBond):
+            T = instrument.maturity; P = self.calculate(instrument)
+            if isinstance(m, SwitchingVasicek):
+                B = (1 - math.exp(-m.a * T)) / m.a
+            elif hasattr(m, "k") and hasattr(m, "theta"):        # CIR
+                h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1
+                B = 2 * ex / ((h + m.k) * ex + 2 * h)
+            else:
+                raise TypeError("bond greeks in r0 are given for Vasicek and CIR")
+            return dict(delta=-B * P, gamma=B * B * P)
+        raise TypeError("greeks are given for vanilla options and zero-coupon bonds")
 
     def _frequencyLimit(self, T, k=0.0):
-        """Frequency beyond which the Lewis integrand is below 1e-16 under the averaged model, found by doubling.
+        """Frequency beyond which the averaged characteristic function is below 1e-16, found by doubling; this bounds
+        the price, delta, gamma and vega integrands alike.
         The averaged characteristic function is the prefactor times exp of the integral of the stationary-weighted
         forcing, which every model exposes in closed form."""
         m = self.model; pi = m.chain.stationaryDistribution()
         def size(u):
             g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
             gbar = sum((g[i].scale(pi[i]) for i in range(1, len(g))), g[0].scale(pi[0]))
-            return abs(pre() * cmath.exp(gbar.integral(T))) / (u * u + 0.25)
+            return abs(pre() * cmath.exp(gbar.integral(T)))          # no 1/(u^2 + 1/4): the gamma integrand has none
         U = 8.0
         while size(U) > 1e-16 and U < 1e4:
             U *= 2
