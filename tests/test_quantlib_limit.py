@@ -62,3 +62,27 @@ def test_merton_matches_series():
     ours = rl.VanillaOption(("call", K), maturity=T)
     ours.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingMerton76Process(CHAIN, S0, r, 0.0, s, lam, mj, sj), order=2))
     assert ours.NPV() == pytest.approx(total, rel=1e-8)
+
+
+def test_bates_matches_quantlib():
+    S0, r, q, v0, kappa, th, xi, rho, lam, nu, delta, K, T = 100.0, 0.02, 0.01, 0.04, 1.5, 0.05, 0.4, -0.6, 2.0, -0.05, 0.1, 100.0, 1.0
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    rts, qts = _ql_curves(r, q, ref)
+    bp = ql.BatesProcess(rts, qts, ql.QuoteHandle(ql.SimpleQuote(S0)), v0, kappa, th, xi, rho, lam, nu, delta)
+    payoff, ex = ql.PlainVanillaPayoff(ql.Option.Call, K), ql.EuropeanExercise(ref + ql.Period(365, ql.Days))
+    qopt = ql.VanillaOption(payoff, ex); qopt.setPricingEngine(ql.BatesEngine(ql.BatesModel(bp)))
+    ours = rl.VanillaOption(payoff, ex, maturity=T)
+    ours.setPricingEngine(rl.NumericalSwitchingEngine(rl.SwitchingBatesModel(CHAIN, S0, r, q, v0, kappa, th, xi, rho, lam, nu, delta)))
+    assert ours.NPV() == pytest.approx(qopt.NPV(), rel=1e-7)
+
+
+def test_variance_gamma_matches_quantlib():
+    S0, r, q, s, nu, th, K, T = 100.0, 0.02, 0.0, 0.2, 0.3, -0.1, 100.0, 1.0
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    rts, qts = _ql_curves(r, q, ref)
+    vp = ql.VarianceGammaProcess(ql.QuoteHandle(ql.SimpleQuote(S0)), qts, rts, s, nu, th)
+    payoff, ex = ql.PlainVanillaPayoff(ql.Option.Call, K), ql.EuropeanExercise(ref + ql.Period(365, ql.Days))
+    qopt = ql.VanillaOption(payoff, ex); qopt.setPricingEngine(ql.VarianceGammaEngine(vp))
+    ours = rl.VanillaOption(payoff, ex, maturity=T)
+    ours.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingVarianceGammaProcess(CHAIN, S0, r, q, s, nu, th), order=1))
+    assert ours.NPV() == pytest.approx(qopt.NPV(), rel=1e-6)

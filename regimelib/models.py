@@ -95,3 +95,38 @@ class SwitchingMerton76Process(SwitchingModel):
     def returnForcing(self, u, T):
         g, gfuncs = _q.merton76(u, self.sigma, self.jumpIntensity, self.logJumpMean, self.logJumpVol)
         return g, gfuncs, (lambda: 1.0)
+
+
+class SwitchingBatesModel(SwitchingModel):
+    """QuantLib BatesModel / BatesProcess(r, q, S0, v0, kappa, theta, sigma, rho, lambda, nu, delta): Heston with
+    lognormal jumps of log-mean nu and log-sd delta at intensity lambda. theta and lambda may switch."""
+    def __init__(self, chain, S0, r, q, v0, kappa, theta, sigma, rho, jumpIntensity, logJumpMean, logJumpVol):
+        super().__init__(chain)
+        self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
+        self.kappa, self.sigma, self.rho = float(kappa), float(sigma), float(rho)
+        self.theta = _per_regime(theta, self.n)
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+
+    def forward(self, T):
+        return self.S0 * math.exp((self.r - self.q) * T)
+
+    def returnForcing(self, u, T):
+        g, gfuncs, D = _q.bates(u, self.kappa, self.theta, self.sigma, self.rho, self.jumpIntensity,
+                                self.logJumpMean, self.logJumpVol, T)
+        return g, gfuncs, (lambda: cmath.exp(D(T) * self.v0))
+
+
+class SwitchingVarianceGammaProcess(SwitchingModel):
+    """QuantLib VarianceGammaProcess(S0, q, r, sigma, nu, theta); all three parameters may switch."""
+    def __init__(self, chain, S0, r, q, sigma, nu, theta):
+        super().__init__(chain)
+        self.S0, self.r, self.q = float(S0), float(r), float(q)
+        self.sigma, self.nu, self.theta = _per_regime(sigma, self.n), _per_regime(nu, self.n), _per_regime(theta, self.n)
+
+    def forward(self, T):
+        return self.S0 * math.exp((self.r - self.q) * T)
+
+    def returnForcing(self, u, T):
+        g, gfuncs = _q.variance_gamma(u, self.sigma, self.nu, self.theta)
+        return g, gfuncs, (lambda: 1.0)

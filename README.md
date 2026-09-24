@@ -26,6 +26,8 @@ print(opt.NPV())
 | `BlackScholesMertonProcess` | `SwitchingBlackScholesProcess(chain, S0, r, q, sigma)` | `sigma` |
 | `HestonModel` | `SwitchingHestonModel(chain, S0, r, q, v0, kappa, theta, sigma, rho)` | `theta` |
 | `Merton76Process` | `SwitchingMerton76Process(chain, S0, r, q, sigma, jumpIntensity, logJumpMean, logJumpVol)` | `sigma`, `jumpIntensity` |
+| `BatesModel` | `SwitchingBatesModel(chain, S0, r, q, v0, kappa, theta, sigma, rho, jumpIntensity, logJumpMean, logJumpVol)` | `theta`, `jumpIntensity` |
+| `VarianceGammaProcess` | `SwitchingVarianceGammaProcess(chain, S0, r, q, sigma, nu, theta)` | all three |
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples; times are in years.
@@ -34,7 +36,7 @@ Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding
 with the initial layer; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
 options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
 
-Roadmap: Bates and variance gamma (their forcings are in `_engine/quantlib_models.py`); bond options (Jamshidian plus
+Roadmap: bond options (Jamshidian plus
 the first-order correction from `homogenization/papers/fast-switching/bond_option_explicit.py`); two-factor
 Gaussian and credit models; QuantLib dates and day counters; Monte Carlo referee with exact regime paths.
 
