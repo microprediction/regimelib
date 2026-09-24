@@ -25,10 +25,12 @@ class Instrument:
 
 
 class ZeroCouponBond(Instrument):
-    """Unit face value paid at maturity (years)."""
-    def __init__(self, maturity, dayCounter=None):
+    """Unit face value paid at maturity (years or a QuantLib Date). With regimeAtMaturity = j the face value is paid
+    only if the regime at maturity is j, which prices the memory of the regime; the sum over j is the plain bond."""
+    def __init__(self, maturity, dayCounter=None, regimeAtMaturity=None):
         super().__init__()
         self.maturity = _years(maturity, dayCounter)
+        self.regimeAtMaturity = regimeAtMaturity
 
 
 class VanillaOption(Instrument):

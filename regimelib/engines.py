@@ -19,14 +19,17 @@ class SwitchingEngine:
         self.model, self.regime, self.nodes = model, regime, nodes
 
     # a(T) for the reduced system; subclasses choose the method
-    def _a(self, g, gfuncs, T):
+    def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
 
     def calculate(self, instrument):
         m, T = self.model, instrument.maturity
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
-            return float(np.real(pre(T) * self._a(g, gfuncs, T)))
+            a0 = None
+            if instrument.regimeAtMaturity is not None:
+                a0 = np.zeros(m.n); a0[instrument.regimeAtMaturity] = 1.0
+            return float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
         if isinstance(instrument, VanillaOption):
             return self._vanilla(instrument)
         if isinstance(instrument, ZeroCouponBondOption):
@@ -83,8 +86,8 @@ class FastSwitchingEngine(SwitchingEngine):
         super().__init__(model, regime, nodes)
         self.order = order
 
-    def _a(self, g, gfuncs, T):
-        return FastSwitch(self.model.chain.generator, g, order=self.order).a(T, self.order)[self.regime]
+    def _a(self, g, gfuncs, T, a0=None):
+        return FastSwitch(self.model.chain.generator, g, order=self.order, a0=a0).a(T, self.order)[self.regime]
 
     def _order(self):
         return self.order
@@ -95,5 +98,5 @@ class NumericalSwitchingEngine(SwitchingEngine):
         super().__init__(model, regime, nodes)
         self.rtol = rtol
 
-    def _a(self, g, gfuncs, T):
-        return numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol)[self.regime]
+    def _a(self, g, gfuncs, T, a0=None):
+        return numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol, a0=a0)[self.regime]
