@@ -3,7 +3,8 @@ solves the reduced system a' = (Q + diag g) a numerically and is the referee. Bo
 import math
 import cmath
 import numpy as np
-from ._engine.fastswitch import FastSwitch, numerical_a_callable
+from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
+Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
 from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite

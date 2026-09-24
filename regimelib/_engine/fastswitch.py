@@ -396,7 +396,9 @@ class Cheb:
         """Cap the degree at MAXDEG, dropping only a tail at rounding level; a larger tail raises."""
         if len(s.coef) > self.MAXDEG + 1:
             tail = np.abs(s.coef[self.MAXDEG + 1:]).sum()
-            if tail > 1e-13 * np.abs(s.coef).max():
+            # rounding level relative to the series, with an absolute floor so that a series that is itself
+            # negligible (a high-order product of small terms) is not refused for a tail far below rounding
+            if tail > 1e-13 * max(np.abs(s.coef).max(), 1e-20):
                 raise ValueError(f"a Chebyshev product needs degree {len(s.coef) - 1} > Cheb.MAXDEG = {self.MAXDEG} "
                                  f"(the coefficients above the cap sum to {tail:.1e}); raise Cheb.MAXDEG or fit "
                                  "the forcing with a lower degree")

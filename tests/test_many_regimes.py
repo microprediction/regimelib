@@ -33,5 +33,7 @@ def test_three_regime_heston_frozen_and_switching():
     assert ours.NPV() == pytest.approx(qopt.NPV(), rel=1e-7)
     model = rl.SwitchingHestonModel(THREE, S0, r, q, v0, kappa, [0.09, 0.05, 0.02], xi, rho)
     ours.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=1)); ref = ours.NPV()
-    ours.setPricingEngine(rl.FastSwitchingEngine(model, order=2, regime=1))
-    assert abs(ours.NPV() - ref) < 1e-4 * ref
+    errs = []
+    for o in (0, 1, 2, 4):
+        ours.setPricingEngine(rl.FastSwitchingEngine(model, order=o, regime=1)); errs.append(abs(ours.NPV() - ref))
+    assert errs[0] > errs[1] > errs[2] > errs[3] and errs[3] < 1e-4 * ref
