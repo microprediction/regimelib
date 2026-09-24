@@ -2,6 +2,7 @@
 solves the reduced system a' = (Q + diag g) a numerically and is the referee. Both take the starting regime."""
 import math
 import cmath
+import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
@@ -13,6 +14,10 @@ from .models import SwitchingVasicek, SwitchingHullWhite
 def _gauss(U, n):
     x, w = np.polynomial.legendre.leggauss(n)
     return (x + 1) * U / 2, w * U / 2
+
+
+class ExpansionWarning(UserWarning):
+    """The fast-switching expansion may not have converged for this instrument and chain."""
 
 
 class SwitchingEngine:
@@ -167,41 +172,65 @@ class FastSwitchingEngine(SwitchingEngine):
         self.orderUsed = self.lastIncrement = None
 
     def _aVector(self, g, gfuncs, T, a0=None):
-        fs = FastSwitch(self.model.chain.generator, g, order=self._order(), a0=a0)
+        """a(T) over all regimes through the engine's order, with the size of the last two terms recorded for the
+        convergence diagnostics; where the expansion factor over the averaged value is not moderate (large forcing at
+        high frequency) the averaged value is used at that node and `tailFallbacks` is incremented."""
+        N = self._order()
+        fs = FastSwitch(self.model.chain.generator, g, order=N, a0=a0)
+        base = np.asarray(fs.a(T, 0), complex)
         with np.errstate(all="ignore"):
             try:
-                avec = np.asarray(fs.a(T, self._order()), complex)
+                avec = np.asarray(fs.a(T, N), complex)
+                prev = np.asarray(fs.a(T, N - 1), complex) if N >= 1 else base
+                prev2 = np.asarray(fs.a(T, N - 2), complex) if N >= 2 else prev
             except (OverflowError, FloatingPointError, ValueError):
-                avec = np.full(self.model.n, np.nan, complex)
-        base = np.asarray(fs.a(T, 0), complex)
-        if not np.all(np.isfinite(avec)) or np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300)):
-            self.tailFallbacks = getattr(self, "tailFallbacks", 0) + 1; avec = base
+                avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
+        ok = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
+        if not ok:
+            self._diag["tailFallbacks"] += 1
+            self._diag["tailWeight"] = max(self._diag["tailWeight"], float(np.max(np.abs(base))))
+            avec = base
+        else:
+            i = self.regime; scale = max(abs(avec[i]), 1e-300)
+            last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
+            if abs(base[i]) > 1e-8 * self._diag.get("phiScale", 1.0):   # only nodes that matter
+                self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
+                if N >= 2 and last >= before and last > 1e-14:
+                    self._diag["notDecreasing"] = True
         gT = np.array([gi.value(T) for gi in g], complex)
         return avec, self.model.chain.generator @ avec + gT * avec
 
     def _a(self, g, gfuncs, T, a0=None):
-        """The expansion is asymptotic in eps |g|: at frequencies where the forcing is large it diverges while the
-        characteristic function there is negligible. Where the expansion's factor over the averaged value is not
-        moderate, the averaged value is used at that node and `tailFallbacks` is incremented."""
-        fs = FastSwitch(self.model.chain.generator, g, order=self._order(), a0=a0)
-        base = fs.a(T, 0)[self.regime]
-        try:
-            with np.errstate(all="ignore"):
-                full = fs.a(T, self._order())[self.regime]
-            ok = np.isfinite(full) and (abs(base) == 0 or abs(full / base) < 1e3)
-        except (OverflowError, FloatingPointError, ValueError):
-            ok = False
-        if ok:
-            return full
-        self.tailFallbacks = getattr(self, "tailFallbacks", 0) + 1
-        return base
+        return self._aVector(g, gfuncs, T, a0)[0][self.regime]
 
     def _order(self):
         return self.order if self.order is not None else self.maxOrder
 
     def calculate(self, instrument, results=False):
+        self._diag = dict(lastTerm=0.0, notDecreasing=False, tailFallbacks=0, tailWeight=0.0, phiScale=1.0)
+        out = self._calculateOrders(instrument)
+        eps = self.model.chain.meanHoldingTime()
+        d = dict(epsilon=eps, orderUsed=self.orderUsed, lastTermRelative=self._diag["lastTerm"],
+                 tailFallbacks=self._diag["tailFallbacks"])
+        out["diagnostics"] = d
+        if self._diag["notDecreasing"]:
+            warnings.warn(f"the fast-switching expansion is not converging at order {self.orderUsed}: the last term "
+                          f"({d['lastTermRelative']:.1e} of the value) is not smaller than the one before it; the holding "
+                          f"time is {eps:.3g}. Use NumericalSwitchingEngine, or order=None to stop at the best truncation.",
+                          ExpansionWarning, stacklevel=3)
+        elif d["lastTermRelative"] > 1e-3:
+            warnings.warn(f"the fast-switching expansion at order {self.orderUsed} is rough: the last term is "
+                          f"{d['lastTermRelative']:.1e} of the value (holding time {eps:.3g}). Raise the order or use "
+                          "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=3)
+        if self._diag["tailFallbacks"] and self._diag["tailWeight"] > 1e-8:
+            warnings.warn(f"the expansion was replaced by the averaged value at {self._diag['tailFallbacks']} Fourier "
+                          f"nodes where it diverged, the largest with characteristic function {self._diag['tailWeight']:.1e}; "
+                          "the price may be affected. Use NumericalSwitchingEngine to check.", ExpansionWarning, stacklevel=3)
+        return out if results else out["value"]
+
+    def _calculateOrders(self, instrument):
         if self.order is not None:
-            self.orderUsed = self.order; return super().calculate(instrument, results)
+            self.orderUsed = self.order; return super().calculate(instrument, results=True)
         prev, prev_inc, prev_out = None, None, None
         for n in range(0, self.maxOrder + 1):
             self.order = n
@@ -213,14 +242,15 @@ class FastSwitchingEngine(SwitchingEngine):
             if prev is not None:
                 inc = abs(v - prev) / max(abs(v), 1e-300)
                 if inc <= self.tol or (prev_inc is not None and inc > prev_inc):
-                    # converged, or the terms have started to grow: keep the best truncation
                     keep = out if inc <= self.tol else prev_out
                     self.orderUsed, self.lastIncrement = (n if inc <= self.tol else n - 1), min(inc, prev_inc or inc)
-                    return keep if results else keep["value"]
+                    if inc > self.tol:
+                        self._diag["notDecreasing"] = True
+                    return keep
                 prev_inc = inc
             prev, prev_out = v, out
         self.orderUsed, self.lastIncrement = self.maxOrder, prev_inc
-        return prev_out if results else prev
+        return prev_out
 
 
 class NumericalSwitchingEngine(SwitchingEngine):

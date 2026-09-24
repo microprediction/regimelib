@@ -37,7 +37,10 @@ Instruments accept QuantLib payoff and exercise objects or plain `("call", strik
 
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
 with the initial layer; `order=None` adds terms until successive orders agree to `tol` or the series stops improving
-(`orderUsed` and `lastIncrement` are set after `NPV()`); `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
+(`orderUsed` and `lastIncrement` are set after `NPV()`). The engine raises an `ExpansionWarning` when the last term is
+not smaller than the one before it, when it is more than a thousandth of the value, or when the expansion had to be
+replaced by the averaged value at a Fourier node that mattered; `instrument._result('diagnostics')` gives the holding
+time, the order used, the relative size of the last term and the fallback count; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
 options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
 
 Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a grid-free referee that samples regime paths exactly and prices each path in closed form (Vasicek bonds, Black-Scholes options), with `standardError` set after `NPV()`.
