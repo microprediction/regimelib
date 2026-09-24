@@ -71,3 +71,55 @@ class VasicekTwoStateBond:
     def delta(self): return self.greek("r0")
     def gamma(self): return self.greek("r0", "r0")
     def theta(self): return -self.greek("T")
+
+
+# ---------------------------------------------------------------- any number of regimes, first order
+Kcc, Kcd, Kdd, mc, md, thbar, s2bar = sp.symbols("K_cc K_cd K_dd m_c m_d thetabar sigma2bar", real=True)   # K_cd is the symmetric part (K_cd + K_dc) / 2
+
+
+class VasicekBondFirstOrder:
+    """Vasicek bond under any finite chain, first order in the holding time, as a formula.
+
+    g_i(t) = c_i B(t) + d_i B(t)^2 with c_i = -kappa theta_i, d_i = sigma_i^2 / 2. The chain enters through
+    K_ab = int_0^inf Cov(a(y_0), b(y_t)) dt for a, b in {c, d} (the Green-Kubo matrix; only its symmetric part enters
+    a scalar forcing, so K_cd here means (K_cd + K_dc) / 2, which differ for a non-reversible chain) and the memory coefficients
+    m_c, m_d = -(Q# c~)_i, -(Q# d~)_i of the starting regime i:
+
+        log P_i = -B r0 - kappa thetabar I1 + sigma2bar I2 / 2 + K_cc I2 + 2 K_cd I3 + K_dd I4 + log(1 + m_c B + m_d B^2),
+        I_k = int_0^T B^k dt, B = (1 - e^{-kappa T}) / kappa."""
+    symbols = dict(r0=r0, kappa=kappa, T=T, thetabar=thbar, sigma2bar=s2bar, Kcc=Kcc, Kcd=Kcd, Kdd=Kdd, mc=mc, md=md)
+
+    def __init__(self):
+        B = (1 - sp.exp(-kappa * t)) / kappa
+        I = {k: sp.integrate(sp.expand(B ** k), (t, 0, T)) for k in (1, 2, 3, 4)}
+        BT = B.subs(t, T)
+        self.terms = {
+            "state": -BT * r0,
+            "averaged": -kappa * thbar * I[1] + s2bar / 2 * I[2],
+            "green_kubo": Kcc * I[2] + 2 * Kcd * I[3] + Kdd * I[4],
+            "memory": sp.log(1 + mc * BT + md * BT ** 2),
+        }
+        self.logPrice = sum(self.terms.values()); self.price = sp.exp(self.logPrice)
+        self._fn = {}
+
+    @staticmethod
+    def coefficients(chain, kappa_, thetas, sigmas, regime=0):
+        """The numbers the chain contributes, from its generator."""
+        import numpy as np
+        from .firstorder import green_kubo
+        c = -kappa_ * np.asarray(thetas, float); d = 0.5 * np.asarray(sigmas, float) ** 2
+        K, M = green_kubo(chain, [c, d]); pi = chain.stationaryDistribution()
+        return dict(thetabar=float(pi @ thetas), sigma2bar=float(pi @ np.asarray(sigmas) ** 2),
+                    Kcc=float(K[0, 0]), Kcd=float(0.5 * (K[0, 1] + K[1, 0])), Kdd=float(K[1, 1]), mc=float(-M[0, regime]), md=float(-M[1, regime]))
+
+    def greek(self, *wrt):
+        e = self.price
+        for name in wrt:
+            e = sp.diff(e, self.symbols[name])
+        return e
+
+    def evaluate(self, expr, **values):
+        key = sp.srepr(expr)
+        if key not in self._fn:
+            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
+        return float(self._fn[key](*[values[n] for n in self.symbols]))

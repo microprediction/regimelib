@@ -42,3 +42,16 @@ def test_delta_formula_is_minus_B_times_price():
     f = VasicekTwoStateBond(regime=0)
     B = (1 - sp.exp(-f.symbols["kappa"] * f.symbols["T"])) / f.symbols["kappa"]
     assert sp.simplify(f.delta() / f.price + B) == 0
+
+
+def test_first_order_formula_for_three_regimes():
+    from regimelib.symbolic import VasicekBondFirstOrder
+    chain = rl.RegimeChain([[-5, 3, 2], [4, -9, 5], [1, 6, -7]]); kappa_, thetas, sigmas, r0_, T_ = 0.5, [0.08, 0.05, 0.01], [0.015, 0.01, 0.006], 0.03, 4.0
+    f = VasicekBondFirstOrder()
+    for regime in (0, 1, 2):
+        vals = dict(r0=r0_, kappa=kappa_, T=T_, **f.coefficients(chain, kappa_, thetas, sigmas, regime))
+        bond = rl.ZeroCouponBond(T_); bond.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingVasicek(chain, r0_, kappa_, thetas, sigmas), order=1, regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-12)
+        bond.setPricingEngine(rl.NumericalSwitchingEngine(rl.SwitchingVasicek(chain, r0_, kappa_, thetas, sigmas), regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)      # first order at eps = 3/21
+    assert sp.simplify(f.greek("r0") / f.price + (1 - sp.exp(-f.symbols["kappa"] * f.symbols["T"])) / f.symbols["kappa"]) == 0
