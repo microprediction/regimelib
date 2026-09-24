@@ -138,3 +138,26 @@ def test_g2_matches_quantlib():
     bond = rl.ZeroCouponBond(T); bond.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingG2(CHAIN, ts, a, s, b, e, rho), order=2))
     assert bond.NPV() == pytest.approx(ts.discount(T), rel=1e-10)
     assert bond.NPV() == pytest.approx(g2.discountBond(0.0, T, [0.0, 0.0]), rel=1e-9)
+
+
+def test_hull_white_bond_option_matches_quantlib():
+    ref = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref
+    a, s, T, S, K = 0.5, 0.012, 1.0, 4.0, 0.9
+    ts = ql.YieldTermStructureHandle(ql.ZeroCurve([ref, ref + ql.Period(2, ql.Years), ref + ql.Period(10, ql.Years)],
+                                                  [0.02, 0.03, 0.035], ql.Actual365Fixed()))
+    hw = ql.HullWhite(ts, a, s); model = rl.SwitchingHullWhite(CHAIN, ts, a, s)
+    for kind, qtype in (("call", ql.Option.Call), ("put", ql.Option.Put)):
+        opt = rl.ZeroCouponBondOption(kind, K, T, S)
+        opt.setPricingEngine(rl.FastSwitchingEngine(model, order=2))
+        assert opt.NPV() == pytest.approx(hw.discountBondOption(qtype, K, T, S), rel=1e-7)
+
+
+def test_hull_white_bond_option_switching_converges():
+    chain = rl.RegimeChain.twoState(20.0, 30.0)
+    model = rl.SwitchingHullWhite(chain, 0.03, 0.5, [0.02, 0.005])
+    opt = rl.ZeroCouponBondOption("call", 0.9, 1.0, 4.0)
+    opt.setPricingEngine(rl.NumericalSwitchingEngine(model)); ref_npv = opt.NPV()
+    errs = []
+    for o in (0, 1, 2):
+        opt.setPricingEngine(rl.FastSwitchingEngine(model, order=o)); errs.append(abs(opt.NPV() - ref_npv))
+    assert errs[0] > errs[1] > errs[2]

@@ -6,7 +6,7 @@ import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
 from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption
 from ._engine.options import zcb_call
-from .models import SwitchingVasicek
+from .models import SwitchingVasicek, SwitchingHullWhite
 
 
 def _gauss(U, n):
@@ -37,15 +37,22 @@ class SwitchingEngine:
         raise TypeError("unsupported instrument")
 
     def _bondOption(self, opt):
-        m = self.model
-        if not isinstance(m, SwitchingVasicek):
-            raise TypeError("bond options are priced under SwitchingVasicek")
-        call = zcb_call(opt.maturity, opt.bondMaturity, opt.strike, m.r0, self.regime, m.a, m.b, m.sigma,
-                        m.chain.generator, order=self._order())
+        m = self.model; T, S, K = opt.maturity, opt.bondMaturity, opt.strike
+        if isinstance(m, SwitchingVasicek):
+            call = zcb_call(T, S, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+        elif isinstance(m, SwitchingHullWhite):
+            # r = x + phi(t): P(T, S) = c P_x(T, S) with c = exp(-int_T^S phi), and the discount to T carries
+            # exp(-int_0^T phi), so the call is exp(-int_0^T phi) c Call_x(strike K / c) under the zero-mean factor.
+            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
+            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            e0T = m.discount(T) * math.exp(-shift(T)); c = m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))
+            call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+        else:
+            raise TypeError("bond options are priced under SwitchingVasicek or SwitchingHullWhite")
         if opt.isCall:
             return call
-        bond = lambda T: self.calculate(ZeroCouponBond(T))          # put-call parity: C - P = P(0,S) - K P(0,T)
-        return call - bond(opt.bondMaturity) + opt.strike * bond(opt.maturity)
+        bond = lambda t: self.calculate(ZeroCouponBond(t))          # put-call parity: C - P = P(0,S) - K P(0,T)
+        return call - bond(S) + K * bond(T)
 
     def _order(self):
         return None
