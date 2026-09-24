@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite
 
@@ -43,7 +43,13 @@ class SwitchingEngine:
             if B is not None:                                     # sensitivities to the state r0
                 out.update(delta=-B * P, gamma=B * B * P)
         elif isinstance(instrument, VanillaOption):
-            out = self._vanillaAll(instrument)
+            out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
+        elif isinstance(instrument, CouponBond):
+            out = {"value": 0.0, "delta": 0.0, "gamma": 0.0}
+            for t, c in instrument.cashflows:
+                r = self.calculate(ZeroCouponBond(t), results=True)
+                for key in out:
+                    out[key] += c * r.get(key, math.nan)
         elif isinstance(instrument, ZeroCouponBondOption):
             out = {"value": self._bondOption(instrument)}
         else:
@@ -128,6 +134,25 @@ class SwitchingEngine:
     def _aVector(self, g, gfuncs, T, a0=None):
         """a(T) over all regimes and its time derivative (Q + diag g(T)) a(T)."""
         raise NotImplementedError
+
+    def _digital(self, opt):
+        """Gil-Pelaez: P(S_T > K) = 1/2 + (1/pi) int_0^inf Re(e^{-i u k} phi(u) / (i u)) du with k = ln(K/F) and phi the
+        characteristic function of the log return; asset-or-nothing uses the share measure, phi(u - i) / phi(-i)."""
+        m, T, K = self.model, opt.maturity, opt.strike
+        F = m.forward(T); k = math.log(K / F); disc = math.exp(-m.r * T)
+        U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
+        shift = -1j if opt.payoffType == "asset" else 0.0
+        I = 0.0
+        for u, w in zip(us, ws):
+            g, gfuncs, pre = m.returnForcing(u + shift, T)
+            phi = pre() * self._a(g, gfuncs, T)
+            I += w * (cmath.exp(-1j * u * k) * phi / (1j * u)).real
+        prob = 0.5 + I / math.pi                              # P(S_T > K) under the relevant measure
+        if opt.payoffType == "cash":
+            value = disc * opt.cash * (prob if opt.isCall else 1 - prob)
+        else:
+            value = disc * F * (prob if opt.isCall else 1 - prob)
+        return {"value": value}
 
     @staticmethod
     def _riccatiD(m, u, T):
