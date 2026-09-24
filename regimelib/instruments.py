@@ -3,6 +3,9 @@ the QuantLib evaluation date with Actual/365 (or a day counter passed as `dayCou
 import math
 
 
+import numpy as np
+
+
 def _years(t, dayCounter=None):
     if hasattr(t, "serialNumber"):                      # a QuantLib Date
         import QuantLib as ql
@@ -98,6 +101,30 @@ class VanillaOption(Instrument):
         if maturity is None:
             raise ValueError("give the maturity in years or as a QuantLib Date")
         self.maturity = _years(maturity, dayCounter)
+        self.isAmerican = "American" in type(exercise).__name__ or str(exercise).lower() == "american"
+
+    def payoffOnGrid(self, S):
+        S = np.asarray(S, float)
+        if self.payoffType == "cash":
+            return self.cash * ((S > self.strike) if self.isCall else (S < self.strike)).astype(float)
+        if self.payoffType == "asset":
+            return S * ((S > self.strike) if self.isCall else (S < self.strike)).astype(float)
+        return np.maximum(S - self.strike, 0.0) if self.isCall else np.maximum(self.strike - S, 0.0)
+
+
+class BarrierOption(VanillaOption):
+    """Continuously monitored single barrier (QuantLib: BarrierOption(barrierType, barrier, rebate, payoff, exercise)).
+    `barrierType` is QuantLib's Barrier.DownIn/UpIn/DownOut/UpOut or one of "downin", "upin", "downout", "upout";
+    the rebate is paid at the hit for knock-out and at expiry for knock-in, as in AnalyticBarrierEngine."""
+    _TYPES = {0: "downin", 1: "upin", 2: "downout", 3: "upout"}
+
+    def __init__(self, barrierType, barrier, rebate, payoff, exercise=None, maturity=None, dayCounter=None):
+        super().__init__(payoff, exercise, maturity, dayCounter)
+        bt = self._TYPES.get(int(barrierType), None) if isinstance(barrierType, int) else str(barrierType).lower()
+        if bt not in self._TYPES.values():
+            raise ValueError("barrierType must be DownIn, UpIn, DownOut or UpOut")
+        self.barrierType, self.barrier, self.rebate = bt, float(barrier), float(rebate)
+        self.isUp, self.isKnockOut = bt.startswith("up"), bt.endswith("out")
 
 
 class CouponBond(Instrument):

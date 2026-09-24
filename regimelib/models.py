@@ -202,12 +202,16 @@ def _bs_operators(self, instrument, n, width):
     from .firstorder import Grid1D
     T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
     s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
-    L = width or 8 * math.sqrt(max(s2) * T) + 2 * abs(self.r - self.q) * T
-    x0 = math.log(self.S0); grid = Grid1D(x0 - L, x0 + L, n)
+    x0 = math.log(self.S0)
+    if isinstance(width, tuple):                                   # explicit log-price ends (barrier grids)
+        grid = Grid1D(width[0], width[1], n)
+    else:
+        L = width or 8 * math.sqrt(max(s2) * T) + 2 * abs(self.r - self.q) * T
+        grid = Grid1D(x0 - L, x0 + L, n)
     D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr")
     A = 0.5 * (D2 - D1)
     Lbar = (self.r - self.q) * D1 + s2bar * A - self.r * I
-    S = np.exp(grid.x); u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+    S = np.exp(grid.x); u0 = instrument.payoffOnGrid(S) if hasattr(instrument, "payoffOnGrid") else (np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0))
     return Lbar, [A], [s2], grid, u0, x0
 
 
@@ -228,7 +232,7 @@ class SwitchingCEVProcess(SwitchingModel):
         s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
         vol_eff = math.sqrt(max(s2)) * self.S0 ** (self.beta - 1)
         L = width or 6 * vol_eff * math.sqrt(T) * self.S0 + 2 * abs(self.r - self.q) * T * self.S0
-        grid = Grid1D(max(self.S0 - L, 1e-8), self.S0 + L, n)
+        grid = Grid1D(width[0], width[1], n) if isinstance(width, tuple) else Grid1D(max(self.S0 - L, 1e-8), self.S0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
         A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
         Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I

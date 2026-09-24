@@ -31,7 +31,9 @@ print(opt.NPV())
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 | `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
 | `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
-| `Vasicek.discountBondOption(type, K, T, S)` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` | `b`, `sigma` |
+| `Vasicek.discountBondOption(type, K, T, S)` | `VanillaOption(payoff, AmericanExercise)` | `VanillaOption` + `FdBlackScholesVanillaEngine` | `SwitchingFDEngine`: Crank–Nicolson on the coupled regime system, projection each step |
+| `BarrierOption(type, barrier, rebate, payoff, exercise)` | `BarrierOption` + `AnalyticBarrierEngine` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
+| `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` | `b`, `sigma` |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
