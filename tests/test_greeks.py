@@ -6,7 +6,10 @@ CHAIN = rl.RegimeChain.twoState(12.0, 8.0)
 
 
 def _fd(f, x, h):
-    return (f(x + h) - f(x - h)) / (2 * h), (f(x + h) - 2 * f(x) + f(x - h)) / (h * h)
+    """Central differences with one Richardson step (errors O(h^4))."""
+    d = lambda h: (f(x + h) - f(x - h)) / (2 * h)
+    g = lambda h: (f(x + h) - 2 * f(x) + f(x - h)) / (h * h)
+    return (4 * d(h / 2) - d(h)) / 3, (4 * g(h / 2) - g(h)) / 3
 
 
 def test_heston_delta_gamma_vega0():

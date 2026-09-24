@@ -117,7 +117,7 @@ class SwitchingEngine:
         raise TypeError("greeks are given for vanilla options and zero-coupon bonds")
 
     def _frequencyLimit(self, T, k=0.0):
-        """Frequency beyond which the averaged characteristic function is below 1e-16, found by doubling; this bounds
+        """Frequency beyond which the averaged characteristic function is below 1e-14, found by doubling; this bounds
         the price, delta, gamma and vega integrands alike.
         The averaged characteristic function is the prefactor times exp of the integral of the stationary-weighted
         forcing, which every model exposes in closed form."""
@@ -127,7 +127,7 @@ class SwitchingEngine:
             gbar = sum((g[i].scale(pi[i]) for i in range(1, len(g))), g[0].scale(pi[0]))
             return abs(pre() * cmath.exp(gbar.integral(T)))          # no 1/(u^2 + 1/4): the gamma integrand has none
         U = 8.0
-        while size(U) > 1e-16 and U < 1e4:
+        while size(U) > 1e-14 and U < 1e4:
             U *= 2
         return U
 
@@ -144,8 +144,21 @@ class FastSwitchingEngine(SwitchingEngine):
         self.orderUsed = self.lastIncrement = None
 
     def _a(self, g, gfuncs, T, a0=None):
+        """The expansion is asymptotic in eps |g|: at frequencies where the forcing is large it diverges while the
+        characteristic function there is negligible. Where the expansion's factor over the averaged value is not
+        moderate, the averaged value is used at that node and `tailFallbacks` is incremented."""
         fs = FastSwitch(self.model.chain.generator, g, order=self._order(), a0=a0)
-        return fs.a(T, self._order())[self.regime]
+        base = fs.a(T, 0)[self.regime]
+        try:
+            with np.errstate(all="ignore"):
+                full = fs.a(T, self._order())[self.regime]
+            ok = np.isfinite(full) and (abs(base) == 0 or abs(full / base) < 1e3)
+        except (OverflowError, FloatingPointError, ValueError):
+            ok = False
+        if ok:
+            return full
+        self.tailFallbacks = getattr(self, "tailFallbacks", 0) + 1
+        return base
 
     def _order(self):
         return self.order if self.order is not None else self.maxOrder
