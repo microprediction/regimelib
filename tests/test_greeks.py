@@ -44,3 +44,21 @@ def test_bond_delta_gamma():
         g = rl.FastSwitchingEngine(model, order=3).greeks(bond)
         d, gm = _fd(lambda r: price(r, cls), 0.03, 1e-3)
         assert g["delta"] == pytest.approx(d, rel=5e-6) and g["gamma"] == pytest.approx(gm, rel=1e-4)
+
+
+def test_instrument_methods_in_quantlib_mold():
+    model = rl.SwitchingHestonModel(CHAIN, 100.0, 0.02, 0.01, 0.04, 1.5, [0.09, 0.02], 0.4, -0.6)
+    # theta and rho differentiate the exact reduced system; against the truncated series they differ by its remainder,
+    # so the check uses the numerical engine
+    opt = rl.VanillaOption(("call", 100.0), maturity=1.0); opt.setPricingEngine(rl.NumericalSwitchingEngine(model))
+    v, d, g, th, vg, rh = opt.NPV(), opt.delta(), opt.gamma(), opt.theta(), opt.vega(), opt.rho()
+    def price(**kw):
+        T = kw.pop("T", 1.0)
+        a = dict(S0=100.0, r=0.02, q=0.01, v0=0.04, kappa=1.5, theta=[0.09, 0.02], sigma=0.4, rho=-0.6); a.update(kw)
+        o = rl.VanillaOption(("call", 100.0), maturity=T); o.setPricingEngine(rl.NumericalSwitchingEngine(rl.SwitchingHestonModel(CHAIN, **a))); return o.NPV()
+    assert th == pytest.approx(-(price(T=1.0 + 1e-3) - price(T=1.0 - 1e-3)) / 2e-3, rel=1e-4)
+    assert rh == pytest.approx((price(r=0.02 + 1e-4) - price(r=0.02 - 1e-4)) / 2e-4, rel=1e-5)
+    bond = rl.ZeroCouponBond(3.0); bond.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingVasicek(CHAIN, 0.03, 0.5, [0.07, 0.02], [0.012, 0.006]), order=3))
+    assert bond.delta() < 0 < bond.gamma()
+    with pytest.raises(RuntimeError):
+        bond.vega()

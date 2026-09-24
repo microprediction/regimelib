@@ -29,8 +29,16 @@ class VasicekTwoStateBond:
         I_gt2 = sp.integrate(sp.expand(gt ** 2), (t, 0, T))
         gtT, gtpT = gt.subs(t, T), sp.diff(gt, t).subs(t, T)
         BT = B.subs(t, T)
-        self.logPrice = (-BT * r0 + I_gbar + eps / 2 * I_gt2 - eps ** 2 / 8 * gtT ** 2
-                         + sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * gtpT))
+        # the terms of log P, kept apart so that a greek can be read term by term
+        self.terms = {
+            "state": -BT * r0,                                          # -B(T) r0
+            "averaged": I_gbar,                                         # the averaged Vasicek exponent
+            "green_kubo": eps / 2 * I_gt2,                              # (eps/2) int gt^2: the first-order term
+            "second_order": -eps ** 2 / 8 * gtT ** 2,                   # -(eps^2/8) gt(T)^2
+            "memory": sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * gtpT),   # the starting regime
+        }
+        self.B, self.gt, self.gbar = BT, gt, gbar
+        self.logPrice = sum(self.terms.values())
         self.price = sp.exp(self.logPrice)
         self._fn = {}
 
@@ -41,6 +49,17 @@ class VasicekTwoStateBond:
         for name in wrt:
             e = sp.diff(e, self.symbols[name])
         return e
+
+    def logGreekTerms(self, *wrt):
+        """The derivative of log P with respect to the named symbols, one formula per term of log P; the greek of the
+        price itself is the price times the sum of these (for a single derivative)."""
+        out = {}
+        for name, term in self.terms.items():
+            e = term
+            for w in wrt:
+                e = sp.diff(e, self.symbols[w])
+            out[name] = sp.simplify(e)
+        return out
 
     def evaluate(self, expr, **values):
         key = sp.srepr(expr)

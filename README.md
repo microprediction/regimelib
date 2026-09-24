@@ -59,10 +59,16 @@ the switching model on the same grid without expansion. `DESIGN.md` gives the ru
 `SwitchingBlackScholesProcess` also has the operator form, and the finite-difference first-order term agrees with the
 exact engine's first-order term there: that check is the certificate for the operator machinery.
 
-Analytic greeks: `engine.greeks(instrument)` gives spot delta and gamma for options, vega in `v0` for Heston and
-Bates, and `r0` delta and gamma for bonds under Vasicek and CIR, by differentiating the formulas rather than bumping.
+Greeks follow QuantLib: `option.delta()`, `gamma()`, `theta()`, `rho()`, and `vega()` (in `v0`) for Heston and Bates;
+`bond.delta()` and `gamma()` in `r0` under Vasicek and CIR. They are computed by differentiating the pricing formula,
+not by bumping; a greek the engine does not provide raises, as in QuantLib.
 
-Roadmap: Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
+Greeks as formulas: `regimelib.symbolic.VasicekTwoStateBond(regime)` builds the closed-form second-order bond price
+as a sympy expression and `.greek('r0')`, `.greek('theta1')`, `.greek('lam')`, `.theta()` are its symbolic
+derivatives; `.evaluate(expr, **values)` evaluates one. The formula equals the engine at order 2 to 1e-12, and the
+symbolic greeks match finite differences of the numerical solution (`tests/test_symbolic.py`).
+
+Roadmap: symbolic closed forms for CIR, jumps, Black-Scholes and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
 correlated Heston-Hull-White with a switched rate level; two-name credit; options under G2 and Hull-White; greeks in
 model parameters from the closed forms.
 
