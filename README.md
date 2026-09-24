@@ -38,7 +38,9 @@ Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding
 with the initial layer; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
 options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
 
-Roadmap: Monte Carlo referee with exact regime paths; regime-conditional payoffs; two-factor Gaussian and credit models.
+Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a grid-free referee that samples regime paths exactly and prices each path in closed form (Vasicek bonds, Black-Scholes options), with `standardError` set after `NPV()`.
+
+Roadmap: regime-conditional payoffs; two-factor Gaussian and credit models.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
 [microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.
