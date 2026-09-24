@@ -12,16 +12,35 @@ def _years(t, dayCounter=None):
 
 
 class Instrument:
+    """QuantLib's mold: setPricingEngine, then NPV() and the greeks the engine provides (delta(), gamma(), theta(),
+    vega(), rho()); a greek the engine does not compute raises, as QuantLib's "not provided" does."""
     def __init__(self):
-        self._engine = None
+        self._engine = None; self._results = None
 
     def setPricingEngine(self, engine):
-        self._engine = engine
+        self._engine = engine; self._results = None
 
-    def NPV(self):
+    def _calculate(self):
         if self._engine is None:
             raise RuntimeError("no pricing engine set")
-        return self._engine.calculate(self)
+        self._results = self._engine.calculate(self, results=True) if hasattr(self._engine, "supportsResults") \
+            else {"value": self._engine.calculate(self)}
+        return self._results
+
+    def NPV(self):
+        return self._calculate()["value"]
+
+    def _result(self, name):
+        r = self._results if self._results is not None else self._calculate()
+        if name not in r:
+            raise RuntimeError(f"{name} not provided by the engine")
+        return r[name]
+
+    def delta(self): return self._result("delta")
+    def gamma(self): return self._result("gamma")
+    def theta(self): return self._result("theta")
+    def vega(self): return self._result("vega")
+    def rho(self): return self._result("rho")
 
 
 class ZeroCouponBond(Instrument):

@@ -22,7 +22,7 @@ def test_heston_delta_gamma_vega0():
     d, _ = _fd(price, 100.0, 0.05); _, gm = _fd(price, 100.0, 1.0)
     assert g["delta"] == pytest.approx(d, rel=5e-6) and g["gamma"] == pytest.approx(gm, rel=1e-4)
     dv, _ = _fd(lambda v: price(100.0, v), 0.04, 0.002)
-    assert g["vega0"] == pytest.approx(dv, rel=1e-4)
+    assert g["vega"] == pytest.approx(dv, rel=1e-4)
 
 
 def test_black_scholes_delta_gamma_switching():

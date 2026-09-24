@@ -16,6 +16,8 @@ def _gauss(U, n):
 
 
 class SwitchingEngine:
+    supportsResults = True
+
     def __init__(self, model, regime=0, nodes=96):
         self.model, self.regime, self.nodes = model, regime, nodes
 
@@ -23,19 +25,34 @@ class SwitchingEngine:
     def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
 
-    def calculate(self, instrument):
+    def calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
             if instrument.regimeAtMaturity is not None:
                 a0 = np.zeros(m.n); a0[instrument.regimeAtMaturity] = 1.0
-            return float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
-        if isinstance(instrument, VanillaOption):
-            return self._vanilla(instrument)
-        if isinstance(instrument, ZeroCouponBondOption):
-            return self._bondOption(instrument)
-        raise TypeError("unsupported instrument")
+            P = float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
+            out = {"value": P}
+            B = self._bondB(T)
+            if B is not None:                                     # sensitivities to the state r0
+                out.update(delta=-B * P, gamma=B * B * P)
+        elif isinstance(instrument, VanillaOption):
+            out = self._vanillaAll(instrument)
+        elif isinstance(instrument, ZeroCouponBondOption):
+            out = {"value": self._bondOption(instrument)}
+        else:
+            raise TypeError("unsupported instrument")
+        return out if results else out["value"]
+
+    def _bondB(self, T):
+        m = self.model
+        if isinstance(m, SwitchingVasicek):
+            return (1 - math.exp(-m.a * T)) / m.a
+        if hasattr(m, "k") and hasattr(m, "theta") and not hasattr(m, "S0"):      # CIR
+            h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1
+            return 2 * ex / ((h + m.k) * ex + 2 * h)
+        return None
 
     def _bondOption(self, opt):
         m = self.model; T, S, K = opt.maturity, opt.bondMaturity, opt.strike
@@ -63,58 +80,64 @@ class SwitchingEngine:
 
     def _vanillaAll(self, opt):
         """Lewis (2001): C = e^{-rT} [F - sqrt(F K) / pi int_0^inf Re(e^{i u k} phi(u - i/2)) / (u^2 + 1/4) du],
-        k = ln(F/K). Differentiating in F puts (1/2 + i u) under the integral for delta and -(u^2 + 1/4) for gamma;
-        differentiating in v0 puts the Riccati coefficient D(T) there for models with phi = exp(D v0) a."""
+        k = ln(F/K). Differentiating in F puts (1/2 + i u) under the integral for delta and rho and -(u^2 + 1/4)
+        for gamma; in v0 it puts the Riccati coefficient D(T); in T it puts d phi / dT, which the reduced system gives
+        as (Q + diag g(T)) a plus the derivative of the prefactor."""
         m, T, K = self.model, opt.maturity, opt.strike
-        F = m.forward(T); k = math.log(F / K); dF = F / m.S0
+        F = m.forward(T); k = math.log(F / K); dF = F / m.S0; mu = m.r - m.q
         U = self._frequencyLimit(T, k)
         us, ws = _gauss(U, self._nodeCount(U, k))
-        I0 = I1 = I2 = Iv = 0.0
+        I0 = I1 = I2 = Iv = It = 0.0
+        stoch = hasattr(m, "v0")
         for u, w in zip(us, ws):
-            g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
-            a = self._a(g, gfuncs, T); phi = pre() * a
+            z = u - 0.5j
+            g, gfuncs, pre = m.returnForcing(z, T)
+            avec, dvec = self._aVector(g, gfuncs, T)
+            a = avec[self.regime]; phi = pre() * a
             e = cmath.exp(1j * u * k) * phi
             I0 += w * e.real / (u * u + 0.25)
             I1 += w * ((0.5 + 1j * u) * e).real / (u * u + 0.25)
             I2 += w * e.real
-            if hasattr(m, "v0"):
-                Iv += w * (e * self._riccatiD(m, u - 0.5j, T)).real / (u * u + 0.25)
+            if stoch:
+                D, dD = self._riccatiD(m, z, T)
+                Iv += w * (e * D).real / (u * u + 0.25)
+                dphi = pre() * (dD * m.v0 * a + dvec[self.regime])
+            else:
+                dphi = pre() * dvec[self.regime]
+            It += w * (cmath.exp(1j * u * k) * ((0.5 + 1j * u) * mu * phi + dphi)).real / (u * u + 0.25)
         disc = math.exp(-m.r * T); root = math.sqrt(F * K)
         call = disc * (F - root / math.pi * I0)
         delta = disc * dF * (1 - root / (math.pi * F) * I1)
         gamma = disc * dF * dF * root / (math.pi * F * F) * I2
-        out = dict(value=call, delta=delta, gamma=gamma)
-        if hasattr(m, "v0"):
-            out["vega0"] = -disc * root / math.pi * Iv
+        dC_dT = -m.r * call + disc * (mu * F - root / math.pi * It)
+        rho = -T * call + disc * T * (F - root / math.pi * I1)
+        out = dict(value=call, delta=delta, gamma=gamma, theta=-dC_dT, rho=rho)
+        if stoch:
+            out["vega"] = -disc * root / math.pi * Iv                 # in v0
         if not opt.isCall:                                    # put-call parity: P = C - e^{-rT} (F - K)
             out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
+            out["theta"] = -(dC_dT - (-m.r * disc * (F - K) + disc * mu * F))
+            out["rho"] = rho - T * K * disc
         return out
+
+    def _aVector(self, g, gfuncs, T, a0=None):
+        """a(T) over all regimes and its time derivative (Q + diag g(T)) a(T)."""
+        raise NotImplementedError
 
     @staticmethod
     def _riccatiD(m, u, T):
-        """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates)."""
+        """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates) and its T-derivative
+        from the Riccati equation D' = xi^2 D^2 / 2 + (rho xi i u - kappa) D - (u^2 + i u) / 2."""
         d = cmath.sqrt((m.rho * m.sigma * 1j * u - m.kappa) ** 2 + m.sigma ** 2 * (1j * u + u * u))
         gm = (m.kappa - m.rho * m.sigma * 1j * u - d) / (m.kappa - m.rho * m.sigma * 1j * u + d)
         e = cmath.exp(-d * T)
-        return (m.kappa - m.rho * m.sigma * 1j * u - d) / m.sigma ** 2 * (1 - e) / (1 - gm * e)
+        D = (m.kappa - m.rho * m.sigma * 1j * u - d) / m.sigma ** 2 * (1 - e) / (1 - gm * e)
+        dD = 0.5 * m.sigma ** 2 * D * D + (m.rho * m.sigma * 1j * u - m.kappa) * D - 0.5 * (u * u + 1j * u)
+        return D, dD
 
     def greeks(self, instrument):
-        """Analytic sensitivities: options give delta and gamma in the spot, and vega0 (in v0) for Heston and Bates;
-        bonds under Vasicek and CIR give delta and gamma in r0. Differentiation is done on the formula, not by bumping."""
-        m = self.model
-        if isinstance(instrument, VanillaOption):
-            out = self._vanillaAll(instrument); out.pop("value"); return out
-        if isinstance(instrument, ZeroCouponBond):
-            T = instrument.maturity; P = self.calculate(instrument)
-            if isinstance(m, SwitchingVasicek):
-                B = (1 - math.exp(-m.a * T)) / m.a
-            elif hasattr(m, "k") and hasattr(m, "theta"):        # CIR
-                h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1
-                B = 2 * ex / ((h + m.k) * ex + 2 * h)
-            else:
-                raise TypeError("bond greeks in r0 are given for Vasicek and CIR")
-            return dict(delta=-B * P, gamma=B * B * P)
-        raise TypeError("greeks are given for vanilla options and zero-coupon bonds")
+        """All results the engine provides for the instrument, as a dict."""
+        out = self.calculate(instrument, results=True); out.pop("value"); return out
 
     def _frequencyLimit(self, T, k=0.0):
         """Frequency beyond which the averaged characteristic function is below 1e-14, found by doubling; this bounds
@@ -143,6 +166,19 @@ class FastSwitchingEngine(SwitchingEngine):
         self.order, self.tol, self.maxOrder = order, tol, maxOrder
         self.orderUsed = self.lastIncrement = None
 
+    def _aVector(self, g, gfuncs, T, a0=None):
+        fs = FastSwitch(self.model.chain.generator, g, order=self._order(), a0=a0)
+        with np.errstate(all="ignore"):
+            try:
+                avec = np.asarray(fs.a(T, self._order()), complex)
+            except (OverflowError, FloatingPointError, ValueError):
+                avec = np.full(self.model.n, np.nan, complex)
+        base = np.asarray(fs.a(T, 0), complex)
+        if not np.all(np.isfinite(avec)) or np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300)):
+            self.tailFallbacks = getattr(self, "tailFallbacks", 0) + 1; avec = base
+        gT = np.array([gi.value(T) for gi in g], complex)
+        return avec, self.model.chain.generator @ avec + gT * avec
+
     def _a(self, g, gfuncs, T, a0=None):
         """The expansion is asymptotic in eps |g|: at frequencies where the forcing is large it diverges while the
         characteristic function there is negligible. Where the expansion's factor over the averaged value is not
@@ -163,26 +199,28 @@ class FastSwitchingEngine(SwitchingEngine):
     def _order(self):
         return self.order if self.order is not None else self.maxOrder
 
-    def calculate(self, instrument):
+    def calculate(self, instrument, results=False):
         if self.order is not None:
-            self.orderUsed = self.order; return super().calculate(instrument)
-        prev, prev_inc = None, None
+            self.orderUsed = self.order; return super().calculate(instrument, results)
+        prev, prev_inc, prev_out = None, None, None
         for n in range(0, self.maxOrder + 1):
             self.order = n
             try:
-                v = super().calculate(instrument)
+                out = super().calculate(instrument, results=True)
             finally:
                 self.order = None
+            v = out["value"]
             if prev is not None:
                 inc = abs(v - prev) / max(abs(v), 1e-300)
                 if inc <= self.tol or (prev_inc is not None and inc > prev_inc):
                     # converged, or the terms have started to grow: keep the best truncation
+                    keep = out if inc <= self.tol else prev_out
                     self.orderUsed, self.lastIncrement = (n if inc <= self.tol else n - 1), min(inc, prev_inc or inc)
-                    return v if inc <= self.tol else prev
+                    return keep if results else keep["value"]
                 prev_inc = inc
-            prev = v
+            prev, prev_out = v, out
         self.orderUsed, self.lastIncrement = self.maxOrder, prev_inc
-        return prev
+        return prev_out if results else prev
 
 
 class NumericalSwitchingEngine(SwitchingEngine):
@@ -192,3 +230,8 @@ class NumericalSwitchingEngine(SwitchingEngine):
 
     def _a(self, g, gfuncs, T, a0=None):
         return numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol, a0=a0)[self.regime]
+
+    def _aVector(self, g, gfuncs, T, a0=None):
+        avec = np.asarray(numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol, a0=a0), complex)
+        gT = np.array([f(T) for f in gfuncs], complex)
+        return avec, self.model.chain.generator @ avec + gT * avec
