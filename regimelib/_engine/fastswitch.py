@@ -161,6 +161,64 @@ class ExpPoly:
         return y
 
 
+# ------------------------------------------------------------------ the inner layer on the mean-zero subspace
+class SchurLayer:
+    """Solves eta' = Q0 eta + P f, eta(0) = y0, on the subspace {v : pi.v = 0}, with P f = f - one (pi.f).
+
+    Q0 is a generator with left null vector pi and right null vector one (pi.one = 1). The subspace is invariant
+    under Q0 and carries an orthonormal basis Bz; in that basis Q0 has a complex Schur form T = U^H (Bz^T Q0 Bz) U,
+    upper triangular, so the system is solved by back substitution one component at a time. A triangular form
+    exists for every Q0, including a defective one (a Jordan block), where an eigenvector basis does not: the
+    tau^k exp(mu tau) terms of a Jordan block come out of the back substitution. Nearly equal diagonal entries share
+    one exponent mu, and the difference delta is kept as a perturbation series so that no term divides by it."""
+
+    def __init__(self, Q0, pi, one=None):
+        from scipy.linalg import schur, null_space
+        Q0 = np.asarray(Q0, float)
+        self.n = n = Q0.shape[0]
+        self.pi = pi = np.asarray(pi, float)
+        self.one = np.ones(n) if one is None else np.asarray(one, float)
+        Bz = null_space(pi[None, :])                                  # orthonormal basis of the mean-zero subspace
+        Tz, Uz = schur((Bz.T @ Q0 @ Bz).astype(complex), output='complex')
+        dz = np.diag(Tz).copy()
+        tol = 1e-6 * max(1.0, float(np.abs(dz).max()))
+        mu = dz.copy()
+        for i in range(len(mu)):                                      # nearly equal eigenvalues share one exponent mu
+            close = np.abs(mu - mu[i]) < tol
+            mu[close] = mu[close].mean()
+        self.mu, self.delta = mu, dz - mu                             # delta kept exactly, as a perturbation series
+        self.T, self.W = Tz, Bz @ Uz                                  # eta = W z, z = W^H eta
+
+    def _diag_solve(self, j, forcing, y0):
+        """z' = (mu_j + delta_j) z + forcing: the terms of order delta_j^p solved in turn, all in exp(mu_j tau).
+        Each term is smaller than the last by about |delta_j| / |Re mu_j| <= 1e-6."""
+        mu, delta = self.mu[j], self.delta[j]
+        z = ExpPoly.solve(mu, forcing, y0)
+        term = z
+        for _ in range(60):
+            if not delta or term.bound() <= 1e-17 * max(z.bound(), 1e-300):
+                return z
+            term = ExpPoly.solve(mu, term.scale(delta), 0.0)
+            z = z + term
+        raise ArithmeticError("the inner layer did not converge for nearly equal eigenvalues of Q0")
+
+    def solve(self, f, y0):
+        """f: list of n ExpPoly forcings; y0: the initial vector (mean zero). Returns eta as a list of ExpPoly."""
+        n, pi, one, Wz, Tz = self.n, self.pi, self.one, self.W, self.T
+        rz = Wz.shape[1]
+        pf = sum((f[k].scale(pi[k]) for k in range(n)), ExpPoly())
+        fp = [f[i] + pf.scale(-one[i]) for i in range(n)]
+        fz = [sum((fp[i].scale(np.conj(Wz[i, j])) for i in range(n)), ExpPoly()) for j in range(rz)]
+        z0 = Wz.conj().T @ np.asarray(y0, complex)
+        z = [None] * rz
+        for j in reversed(range(rz)):
+            forcing = fz[j]
+            for k in range(j + 1, rz):
+                forcing = forcing + z[k].scale(Tz[j, k])
+            z[j] = self._diag_solve(j, forcing, z0[j])
+        return [sum((z[j].scale(Wz[i, j]) for j in range(rz)), ExpPoly()) for i in range(n)]
+
+
 def _vpoly(n):
     return [ExpPoly() for _ in range(n)]
 
@@ -218,47 +276,10 @@ class FastSwitch:
         self.w = w
         self.log_terms = [None] + [pidot([g[i] * w[m][i] for i in range(n)]) for m in range(1, N + 1)]
 
-        # inner layer, solved in a Schur basis of Q0 on the mean-zero subspace {v : pi.v = 0}. A triangular solve
-        # handles defective generators (Jordan blocks), where an eigenvector basis does not exist.
-        from scipy.linalg import schur, null_space
-        Bz = null_space(pi[None, :])                                  # orthonormal basis of the mean-zero subspace
-        Tz, Uz = schur((Bz.T @ Q0 @ Bz).astype(complex), output='complex')
-        dz = np.diag(Tz).copy()
-        tol = 1e-6 * max(1.0, float(np.abs(dz).max()))
-        mu = dz.copy()
-        for i in range(len(mu)):                                      # nearly equal eigenvalues share one exponent mu
-            close = np.abs(mu - mu[i]) < tol
-            mu[close] = mu[close].mean()
-        delta = dz - mu                                               # kept exactly, as a perturbation series below
-        Wz = Bz @ Uz                                                  # eta = Wz z, z = Wz^H eta
-        rz = Wz.shape[1]
-        self.T, self.W = Tz, Wz
-
-        def diag_solve(j, forcing, y0):
-            """z' = (mu_j + delta_j) z + forcing: the terms of order delta_j^p solved in turn, all in exp(mu_j tau).
-            Each term is smaller than the last by about |delta_j| / |Re mu_j| <= 1e-6."""
-            z = ExpPoly.solve(mu[j], forcing, y0)
-            term = z
-            for _ in range(60):
-                if not delta[j] or term.bound() <= 1e-17 * max(z.bound(), 1e-300):
-                    return z
-                term = ExpPoly.solve(mu[j], term.scale(delta[j]), 0.0)
-                z = z + term
-            raise ArithmeticError("the inner layer did not converge for nearly equal eigenvalues of Q0")
-
-        def layer_solve(f, y0):
-            """eta' = Q0 eta + P f, eta(0) = y0 (mean zero), with P f = f - 1 (pi.f)."""
-            pf = sum((f[k].scale(pi[k]) for k in range(n)), ExpPoly())
-            fp = [f[i] + pf.scale(-1) for i in range(n)]
-            fz = [sum((fp[i].scale(np.conj(Wz[i, j])) for i in range(n)), ExpPoly()) for j in range(rz)]
-            z0 = Wz.conj().T @ np.asarray(y0, complex)
-            z = [None] * rz
-            for j in reversed(range(rz)):
-                forcing = fz[j]
-                for k in range(j + 1, rz):
-                    forcing = forcing + z[k].scale(Tz[j, k])
-                z[j] = diag_solve(j, forcing, z0[j])
-            return [sum((z[j].scale(Wz[i, j]) for j in range(rz)), ExpPoly()) for i in range(n)]
+        # inner layer, solved in a Schur basis of Q0 on the mean-zero subspace {v : pi.v = 0}
+        layer = SchurLayer(Q0, pi)
+        self.T, self.W = layer.T, layer.W
+        layer_solve = layer.solve
         K = N + 2
         gT = [np.array(g[i].taylor(K)) for i in range(n)]            # g_i(eps tau) = sum_a eps^a tau^a gT[i][a]
         gbT = np.array(gbar.taylor(K))
