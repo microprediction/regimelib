@@ -31,9 +31,19 @@ print(opt.NPV())
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 | `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
 | `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
-| `Vasicek.discountBondOption(type, K, T, S)` | `VanillaOption(payoff, AmericanExercise)` | `VanillaOption` + `FdBlackScholesVanillaEngine` | `SwitchingFDEngine`: Crank–Nicolson on the coupled regime system, projection each step |
-| `BarrierOption(type, barrier, rebate, payoff, exercise)` | `BarrierOption` + `AnalyticBarrierEngine` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
-| `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` | `b`, `sigma` |
+| `Vasicek.discountBondOption(type, K, T, S)` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` or `SwitchingHullWhite` | `b`, `sigma` |
+| `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
+
+Instruments, with the QuantLib engine that the frozen limit is checked against:
+
+| QuantLib | regimelib | engine |
+|---|---|---|
+| `ZeroCouponBond`, `Bond` | `ZeroCouponBond(T)`, `CouponBond(cashflows)` | `FastSwitchingEngine`, `NumericalSwitchingEngine` |
+| `VanillaOption` + `AnalyticEuropeanEngine`, `AnalyticHestonEngine`, ... | `VanillaOption(payoff, exercise)` with plain, cash-or-nothing and asset-or-nothing payoffs, `impliedVolatility()` | `FastSwitchingEngine`, `NumericalSwitchingEngine` (Lewis) |
+| `VanillaOption` + `FdBlackScholesVanillaEngine` (American) | `VanillaOption(payoff, AmericanExercise)` | `SwitchingFDEngine`: Rannacher then Crank–Nicolson on the coupled regime system, projection each step |
+| `BarrierOption` + `AnalyticBarrierEngine` | `BarrierOption(type, barrier, rebate, payoff, exercise)` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
+| `Swaption` + `JamshidianSwaptionEngine` | `Swaption(kind, expiry, fixedTimes, fixedRate, notional)`, `CouponBondOption(kind, K, T, cashflows)` | Jamshidian's decomposition conditioned on the regime at expiry |
+| `Cap`/`Floor` + `AnalyticCapFloorEngine` | `CapFloor(kind, times, strike, notional)` | caplet = (1 + τK) × put on the zero-coupon bond |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
