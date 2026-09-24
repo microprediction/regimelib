@@ -122,3 +122,39 @@ class ZeroCouponBondOption(Instrument):
         self.strike, self.maturity, self.bondMaturity = float(strike), _years(maturity), _years(bondMaturity)
         if self.bondMaturity <= self.maturity:
             raise ValueError("the bond must mature after the option")
+
+
+class CouponBondOption(Instrument):
+    """European call or put expiring at `maturity` on a bond with fixed cash flows [(time, amount)] after expiry."""
+    def __init__(self, kind, strike, maturity, cashflows, dayCounter=None):
+        super().__init__()
+        self.isCall = str(kind).lower() == "call"; self.strike = float(strike)
+        self.maturity = _years(maturity, dayCounter)
+        self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
+        if min(t for t, _ in self.cashflows) <= self.maturity:
+            raise ValueError("all cash flows must fall after the option expiry")
+
+
+class Swaption(Instrument):
+    """European swaption on a fixed-for-floating swap: `kind` "payer" or "receiver", expiry, fixed-leg payment times
+    (the first accrual starts at expiry), fixed rate, notional. A receiver swaption is a call on the coupon bond
+    struck at par; a payer swaption is the put (QuantLib: Swaption with JamshidianSwaptionEngine)."""
+    def __init__(self, kind, maturity, fixedTimes, fixedRate, notional=1.0, dayCounter=None):
+        super().__init__()
+        self.isPayer = str(kind).lower() == "payer"
+        self.maturity = _years(maturity, dayCounter); ts = [_years(t, dayCounter) for t in fixedTimes]
+        self.fixedRate, self.notional = float(fixedRate), float(notional)
+        cfs = [(t, notional * fixedRate * (t - (ts[i - 1] if i else self.maturity))) for i, t in enumerate(ts)]
+        cfs[-1] = (ts[-1], cfs[-1][1] + notional)
+        self.cashflows = cfs
+
+
+class CapFloor(Instrument):
+    """Cap or floor on the simple forward rate over consecutive periods `times` = [T_0, ..., T_n], strike K, notional.
+    Caplet i = N (1 + tau_i K) x put on the zero-coupon bond maturing at T_i, expiring at T_{i-1}, strike 1/(1 + tau_i K);
+    floorlets are the calls (QuantLib: CapFloor with AnalyticCapFloorEngine)."""
+    def __init__(self, kind, times, strike, notional=1.0, dayCounter=None):
+        super().__init__()
+        self.isCap = str(kind).lower() == "cap"
+        self.times = [_years(t, dayCounter) for t in times]; self.strike, self.notional = float(strike), float(notional)
+        self.maturity = self.times[-1]

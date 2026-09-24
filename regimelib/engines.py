@@ -6,7 +6,8 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor
+from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite
 
@@ -52,6 +53,17 @@ class SwitchingEngine:
                     out[key] += c * r.get(key, math.nan)
         elif isinstance(instrument, ZeroCouponBondOption):
             out = {"value": self._bondOption(instrument)}
+        elif isinstance(instrument, CouponBondOption):
+            out = {"value": self._couponBondOption(instrument.isCall, instrument.strike, instrument.maturity, instrument.cashflows)}
+        elif isinstance(instrument, Swaption):
+            out = {"value": self._couponBondOption(not instrument.isPayer, instrument.notional, instrument.maturity, instrument.cashflows)}
+        elif isinstance(instrument, CapFloor):
+            v = 0.0
+            for T0, T1 in zip(instrument.times[:-1], instrument.times[1:]):
+                tau = T1 - T0; kb = 1.0 / (1.0 + tau * instrument.strike)
+                o = ZeroCouponBondOption("put" if instrument.isCap else "call", kb, T0, T1)
+                v += instrument.notional * (1.0 + tau * instrument.strike) * self._bondOption(o)
+            out = {"value": v}
         else:
             raise TypeError("unsupported instrument")
         return out if results else out["value"]
@@ -82,6 +94,25 @@ class SwitchingEngine:
             return call
         bond = lambda t: self.calculate(ZeroCouponBond(t))          # put-call parity: C - P = P(0,S) - K P(0,T)
         return call - bond(S) + K * bond(T)
+
+    def _couponBondOption(self, isCall, K, T, cashflows):
+        """Under Hull-White the deterministic curve factor scales each cash flow: c_k -> c_k D(S_k)/D(T) e^{-(shift(S_k) - shift(T))}
+        in the zero-mean factor model, and the discount to expiry carries exp(-int_0^T phi)."""
+        m = self.model
+        if isinstance(m, SwitchingVasicek):
+            call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+        elif isinstance(m, SwitchingHullWhite):
+            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
+            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            e0T = m.discount(T) * math.exp(-shift(T))
+            scaled = [(S, c * m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))) for S, c in cashflows]
+            call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+        else:
+            raise TypeError("coupon-bond options, swaptions and caps are priced under SwitchingVasicek or SwitchingHullWhite")
+        if isCall:
+            return call
+        bond = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in cashflows)       # parity: C - P = bond - K P(0,T)
+        return call - bond + K * self.calculate(ZeroCouponBond(T))
 
     def _order(self):
         return None
