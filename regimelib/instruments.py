@@ -36,3 +36,14 @@ class VanillaOption(Instrument):
         if maturity is None:
             raise ValueError("give the maturity in years")
         self.maturity = float(maturity)
+
+
+class ZeroCouponBondOption(Instrument):
+    """European call or put, expiring at `maturity`, on the unit zero-coupon bond maturing at `bondMaturity`
+    (QuantLib: Vasicek.discountBondOption(type, strike, maturity, bondMaturity))."""
+    def __init__(self, kind, strike, maturity, bondMaturity):
+        super().__init__()
+        self.isCall = str(kind).lower() == "call"
+        self.strike, self.maturity, self.bondMaturity = float(strike), float(maturity), float(bondMaturity)
+        if self.bondMaturity <= self.maturity:
+            raise ValueError("the bond must mature after the option")

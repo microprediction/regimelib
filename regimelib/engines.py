@@ -4,7 +4,9 @@ import math
 import cmath
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
-from .instruments import ZeroCouponBond, VanillaOption
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption
+from ._engine.options import zcb_call
+from .models import SwitchingVasicek
 
 
 def _gauss(U, n):
@@ -27,7 +29,23 @@ class SwitchingEngine:
             return float(np.real(pre(T) * self._a(g, gfuncs, T)))
         if isinstance(instrument, VanillaOption):
             return self._vanilla(instrument)
+        if isinstance(instrument, ZeroCouponBondOption):
+            return self._bondOption(instrument)
         raise TypeError("unsupported instrument")
+
+    def _bondOption(self, opt):
+        m = self.model
+        if not isinstance(m, SwitchingVasicek):
+            raise TypeError("bond options are priced under SwitchingVasicek")
+        call = zcb_call(opt.maturity, opt.bondMaturity, opt.strike, m.r0, self.regime, m.a, m.b, m.sigma,
+                        m.chain.generator, order=self._order())
+        if opt.isCall:
+            return call
+        bond = lambda T: self.calculate(ZeroCouponBond(T))          # put-call parity: C - P = P(0,S) - K P(0,T)
+        return call - bond(opt.bondMaturity) + opt.strike * bond(opt.maturity)
+
+    def _order(self):
+        return None
 
     def _vanilla(self, opt):
         """Lewis (2001): C = e^{-rT} [F - sqrt(F K) / pi int_0^inf Re(e^{i u k} phi(u - i/2)) / (u^2 + 1/4) du]."""
@@ -67,6 +85,9 @@ class FastSwitchingEngine(SwitchingEngine):
 
     def _a(self, g, gfuncs, T):
         return FastSwitch(self.model.chain.generator, g, order=self.order).a(T, self.order)[self.regime]
+
+    def _order(self):
+        return self.order
 
 
 class NumericalSwitchingEngine(SwitchingEngine):

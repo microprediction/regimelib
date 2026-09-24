@@ -86,3 +86,15 @@ def test_variance_gamma_matches_quantlib():
     ours = rl.VanillaOption(payoff, ex, maturity=T)
     ours.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingVarianceGammaProcess(CHAIN, S0, r, q, s, nu, th), order=1))
     assert ours.NPV() == pytest.approx(qopt.NPV(), rel=1e-6)
+
+
+def test_vasicek_bond_option_matches_quantlib():
+    r0, a, b, s, T, S, K = 0.03, 0.5, 0.05, 0.01, 1.0, 4.0, 0.9
+    model = ql.Vasicek(r0, a, b, s)
+    ours_model = rl.SwitchingVasicek(CHAIN, r0, a, b, s)
+    for kind, qtype in (("call", ql.Option.Call), ("put", ql.Option.Put)):
+        opt = rl.ZeroCouponBondOption(kind, K, T, S)
+        opt.setPricingEngine(rl.NumericalSwitchingEngine(ours_model))
+        assert opt.NPV() == pytest.approx(model.discountBondOption(qtype, K, T, S), rel=1e-8)
+        opt.setPricingEngine(rl.FastSwitchingEngine(ours_model, order=2))
+        assert opt.NPV() == pytest.approx(model.discountBondOption(qtype, K, T, S), rel=1e-8)
