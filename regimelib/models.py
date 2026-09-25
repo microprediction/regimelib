@@ -306,6 +306,40 @@ class SwitchingG2(SwitchingModel):
         return pre(t2) / pre(t1)
 
 
+class SwitchingHestonVolOfVol(SwitchingModel):
+    """Heston with the volatility of variance xi switching (QuantLib HestonProcess(r, q, S0, v0, kappa, theta, sigma,
+    rho) with sigma = xi per regime). The switched operators v d_vv / 2 and rho v d_xv do not reduce exactly, so this
+    model lives in the first-order tier: FirstOrderFDEngine on the (log S, v) grid, SwitchingFDReferee for the
+    switching solution."""
+    def __init__(self, chain, S0, r, q, v0, kappa, theta, xi, rho):
+        super().__init__(chain)
+        self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
+        self.kappa, self.theta, self.rho = float(kappa), float(theta), float(rho)
+        self.xi = _per_regime(xi, self.n)
+
+    def forward(self, T):
+        return self.S0 * math.exp((self.r - self.q) * T)
+
+    def operators(self, instrument, n, width):
+        """n is (nx, nv) or a single count used for both; width the half-width in log price (and v_max as a multiple
+        of max(v0, theta) is fixed at 5). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
+        + xi_bar^2 v/2 d_vv + rho xi_bar v d_xv - r; the switched forcings are xi^2 on v d_vv / 2 and xi on rho v d_xv."""
+        from .firstorder import Grid2D
+        T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
+        xi = np.asarray(self.xi, float); xibar, xi2bar = float(pi @ xi), float(pi @ xi ** 2)
+        nx, nv = (n, n) if np.isscalar(n) else n
+        vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
+        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, 5 * vtop, nv)
+        V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
+        A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
+        A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
+        Lbar = (sp.diags(self.r - self.q - 0.5 * grid.V) @ grid.d1x + 0.5 * V @ grid.d2x
+                + sp.diags(self.kappa * (self.theta - grid.V)) @ grid.d1v + xi2bar * A1 + xibar * A2 - self.r * I)
+        S = np.exp(grid.X)
+        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        return Lbar, [A1, A2], [xi ** 2, xi], grid, u0, (x0, self.v0)
+
+
 # ---------------------------------------------------------------- several intensities on one regime chain
 class SwitchingIntensityBasket(SwitchingModel):
     """Default intensities lambda^1, ..., lambda^K (SwitchingVasicek or SwitchingCoxIngersollRoss instances) driven

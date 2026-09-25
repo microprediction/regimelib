@@ -44,6 +44,23 @@ class Grid1D:
         return float(np.interp(x0, self.x, u))
 
 
+class Grid2D:
+    """Tensor grid (x, v); node index ix * nv + iv. d1x, d2x, d1v, d2v are the one-dimensional operators lifted."""
+    def __init__(self, xlo, xhi, nx, vlo, vhi, nv):
+        self.gx, self.gv = Grid1D(xlo, xhi, nx), Grid1D(vlo, vhi, nv)
+        self.x, self.v, self.n = self.gx.x, self.gv.x, nx * nv
+        Ix, Iv = sp.identity(nx, format="csr"), sp.identity(nv, format="csr")
+        self.d1x, self.d2x = sp.kron(self.gx.d1(), Iv, format="csr"), sp.kron(self.gx.d2(), Iv, format="csr")
+        self.d1v, self.d2v = sp.kron(Ix, self.gv.d1(), format="csr"), sp.kron(Ix, self.gv.d2(), format="csr")
+        self.d1xv = sp.kron(self.gx.d1(), self.gv.d1(), format="csr")
+        self.X, self.V = np.repeat(self.x, nv), np.tile(self.v, nx)
+
+    def interp(self, u, p):
+        from scipy.interpolate import RegularGridInterpolator
+        f = RegularGridInterpolator((self.x, self.v), np.asarray(u).reshape(len(self.x), len(self.v)))
+        return float(f([p])[0])
+
+
 class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""

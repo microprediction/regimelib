@@ -33,6 +33,7 @@ print(opt.NPV())
 | `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
 | `Vasicek.discountBondOption(type, K, T, S)`, `G2.discountBondOption` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek`, `SwitchingHullWhite` or `SwitchingG2` (caps and floors likewise) | `b`, `sigma`; `sigma`, `eta`, `rho` |
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
+| `HestonProcess` with `sigma` (vol-of-vol) switching | `SwitchingHestonVolOfVol(chain, S0, r, q, v0, kappa, theta, xi, rho)` (first-order tier, 2-D grid; frozen limit against `AnalyticHestonEngine`) | `xi` |
 
 Instruments, with the QuantLib engine that the frozen limit is checked against:
 
@@ -95,8 +96,7 @@ constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), whi
 function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
-correlated Heston-Hull-White with a switched rate level; swaptions under G2; greeks in
+Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); correlated Heston-Hull-White with a switched rate level; swaptions under G2; greeks in
 model parameters from the closed forms.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
