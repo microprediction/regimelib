@@ -109,7 +109,7 @@ class SwitchingFDEngine:
     def _rateOption(self, inst):
         m = self.model
         if not hasattr(m, "bondOnGrid"):
-            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite)")
+            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite, SwitchingCoxIngersollRoss)")
         Big, grid, _, r0, nR = self._system(inst, self.width)
         if isinstance(inst, Swaption):
             exercises = inst.exerciseTimes or [inst.maturity]; isCall, K = not inst.isPayer, inst.notional

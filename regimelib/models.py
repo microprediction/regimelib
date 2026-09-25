@@ -80,6 +80,34 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, T)
         return g, gfuncs, (lambda t: pre(t, self.r0))
 
+    def operators(self, instrument, n, width):
+        """Short-rate grid on [0, r_max]; L_i = k (theta_i - r) d_r + sigma^2 r / 2 d_rr - r, the switched part being
+        the drift k (theta_i - theta_bar) d_r. The origin is an outflow boundary when the Feller condition holds."""
+        from .firstorder import Grid1D
+        pi = self.chain.stationaryDistribution(); th = np.asarray(self.theta, float); thbar = float(pi @ th)
+        if isinstance(width, tuple):
+            grid = Grid1D(width[0], width[1], n)
+        else:
+            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) / (2 * self.k))
+            grid = Grid1D(0.0, top, n)
+        D1, D2 = grid.d1(), grid.d2(); r = grid.x
+        Adrift = self.k * D1
+        Lbar = sp.diags(thbar - r) @ Adrift + 0.5 * self.sigma ** 2 * sp.diags(r) @ D2 - sp.diags(r)
+        return Lbar, [Adrift], [th], grid, None, self.r0
+
+    def bondOnGrid(self, r, t, S):
+        """Bond at time t for maturity S per regime: a_j(S - t) exp(-B(S - t) r), B the CIR Riccati solution."""
+        from .engines import _numericalAVector
+        tau = S - t
+        if tau <= 0:
+            return np.ones((self.n, len(r)))
+        g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, tau)
+        avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
+        return avec[:, None] * np.exp(-B(tau) * np.asarray(r, float)[None, :])
+
+    def deterministicDiscount(self, t1, t2):
+        return 1.0
+
 
 # ---------------------------------------------------------------- equity models: characteristic functions
 class SwitchingBlackScholesProcess(SwitchingModel):

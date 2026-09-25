@@ -44,7 +44,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 | `BarrierOption` + `AnalyticBarrierEngine` | `BarrierOption(type, barrier, rebate, payoff, exercise)` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
 | `ContinuousAveragingAsianOption(Geometric)` + `AnalyticContinuousGeometricAveragePriceAsianEngine` | `ContinuousGeometricAsianOption(payoff, exercise)` | the time average of the log price is a quadratic forcing in time to maturity; `FastSwitchingEngine`, `NumericalSwitchingEngine` |
 | `Swaption` + `JamshidianSwaptionEngine` | `Swaption(kind, expiry, fixedTimes, fixedRate, notional)`, `CouponBondOption(kind, K, T, cashflows)` | Jamshidian's decomposition conditioned on the regime at expiry |
-| `Swaption` + `BermudanExercise` + `TreeSwaptionEngine` | `Swaption(..., exerciseTimes=[...])` or a QuantLib `BermudanExercise` | `SwitchingFDEngine` on a short-rate grid (`SwitchingVasicek`, `SwitchingHullWhite` in its zero-mean factor): exercise value per regime from the switching bond formula; frozen limit against `FdHullWhiteSwaptionEngine` |
+| `Swaption` + `BermudanExercise` + `TreeSwaptionEngine` | `Swaption(..., exerciseTimes=[...])` or a QuantLib `BermudanExercise` | `SwitchingFDEngine` on a short-rate grid (`SwitchingVasicek`, `SwitchingCoxIngersollRoss`, `SwitchingHullWhite` in its zero-mean factor): exercise value per regime from the switching bond formula; frozen limit against `FdHullWhiteSwaptionEngine` |
 | `Cap`/`Floor` + `AnalyticCapFloorEngine` | `CapFloor(kind, times, strike, notional)` | caplet = (1 + τK) × put on the zero-coupon bond |
 | `NthToDefault` (first) | `SwitchingIntensityBasket([lambda1, lambda2, ...])` on one chain; `FirstToDefaultSwap`, `defaultCorrelation(t)` | joint survival = the bond of the summed forcing; the common regime is the dependence |
 | `CreditDefaultSwap` + `MidPointCdsEngine` | `CreditDefaultSwap(side, spread, times, recovery, discount)` on a switching CIR or Vasicek intensity; `fairSpread()`, `couponLegNPV()`, `defaultLegNPV()` | survival = the intensity model's bond price; mid-point protection |
@@ -96,7 +96,7 @@ function of every two-regime Black–Scholes, Merton or variance-gamma model: `.
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
 Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
-correlated Heston-Hull-White with a switched rate level; swaptions under G2; Bermudan swaptions on the CIR grid; greeks in
+correlated Heston-Hull-White with a switched rate level; swaptions under G2; greeks in
 model parameters from the closed forms.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.

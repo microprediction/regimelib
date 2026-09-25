@@ -81,3 +81,41 @@ def test_hull_white_bermudan_frozen_matches_fd_and_european_matches_jamshidian()
     assert eu.NPV() == pytest.approx(ref, rel=3e-4)
     ours.setPricingEngine(rl.SwitchingFDEngine(switching, regime=1, n=1201, steps=600))
     assert ours.NPV() > ref
+
+
+def test_cir_grid_european_matches_jamshidian_and_bermudan_matches_tree():
+    ql.Settings.instance().evaluationDate = REF
+    r0, theta, k, sigma, K = 0.03, 0.04, 0.5, 0.06, 0.035
+    cal, dc = ql.NullCalendar(), ql.Actual365Fixed()
+    cir = ql.CoxIngersollRoss(r0, theta, k, sigma)
+    dates = [REF + ql.Period(i, ql.Months) for i in range(0, 121)]
+    dfs = [1.0] + [cir.discountBond(0.0, dc.yearFraction(REF, d), r0) for d in dates[1:]]
+    ts = ql.YieldTermStructureHandle(ql.DiscountCurve(dates, dfs, dc))
+    index = ql.IborIndex("idx", ql.Period(1, ql.Years), 0, ql.USDCurrency(), cal, ql.Unadjusted, False, dc, ts)
+    start = REF + ql.Period(1, ql.Years); end = start + ql.Period(5, ql.Years)
+    sched = ql.Schedule(start, end, ql.Period(1, ql.Years), cal, ql.Unadjusted, ql.Unadjusted, ql.DateGeneration.Forward, False)
+    swap = ql.VanillaSwap(ql.VanillaSwap.Payer, 1.0, sched, K, dc, sched, index, 0.0, dc)
+    eu = ql.Swaption(swap, ql.EuropeanExercise(start)); eu.setPricingEngine(ql.JamshidianSwaptionEngine(cir, ts))
+    fixed_times = [dc.yearFraction(REF, d) for d in list(sched)[1:]]; ex_times = [dc.yearFraction(REF, d) for d in list(sched)[:-1]]
+    frozen = rl.SwitchingCoxIngersollRoss(rl.RegimeChain.twoState(3.0, 5.0), r0, theta, k, sigma)
+    oe = rl.Swaption("payer", ex_times[0], fixed_times, K); oe.setPricingEngine(rl.SwitchingFDEngine(frozen, n=1601, steps=600))
+    assert oe.NPV() == pytest.approx(eu.NPV(), rel=1e-5)
+    # QuantLib's CIR trinomial tree misses Jamshidian by 1.7% even on the European, so it cannot referee the Bermudan;
+    # the Bermudan must dominate every single-date European (Jamshidian on the remaining swap) and be grid-converged
+    europeans = []
+    for i, d in enumerate(list(sched)[:-1]):
+        sub = ql.Schedule(d, end, ql.Period(1, ql.Years), cal, ql.Unadjusted, ql.Unadjusted, ql.DateGeneration.Forward, False)
+        s_i = ql.VanillaSwap(ql.VanillaSwap.Payer, 1.0, sub, K, dc, sub, index, 0.0, dc)
+        e_i = ql.Swaption(s_i, ql.EuropeanExercise(d)); e_i.setPricingEngine(ql.JamshidianSwaptionEngine(cir, ts)); europeans.append(e_i.NPV())
+    ob = rl.Swaption("payer", ex_times[0], fixed_times, K, exerciseTimes=ex_times)
+    vals = []
+    for n, st in ((1601, 600), (3201, 1200)):
+        ob.setPricingEngine(rl.SwitchingFDEngine(frozen, n=n, steps=st)); vals.append(ob.NPV())
+    assert vals[0] == pytest.approx(vals[1], rel=2e-4) and vals[1] > max(europeans)
+    # with a switching mean level: Bermudan dominates European and the grid is converged
+    sw = rl.SwitchingCoxIngersollRoss(rl.RegimeChain.twoState(6.0, 4.0), r0, [0.06, 0.02], k, sigma)
+    vals = []
+    for n, st in ((1601, 600), (3201, 1200)):
+        oe.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=n, steps=st)); vals.append(oe.NPV())
+    assert vals[0] == pytest.approx(vals[1], rel=2e-4)
+    ob.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=1601, steps=600)); assert ob.NPV() > vals[0] > 0
