@@ -9,7 +9,6 @@ html_theme = "sphinx_rtd_theme"
 html_theme_options = {"navigation_depth": 3, "collapse_navigation": False}
 html_title = "regimelib documentation"
 html_static_path = ["_static"]
-html_extra_path = ["CNAME"]
 highlight_language = "python"
 templates_path = []
 exclude_patterns = ["_build"]

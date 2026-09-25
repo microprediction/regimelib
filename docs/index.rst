@@ -1,7 +1,8 @@
 regimelib
 =========
 
-QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion.
+QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion. The Python reference
+implementation of `regimeswitching.org <https://regimeswitching.org/>`_.
 
 A regime is a finite-state Markov chain that the market does not observe directly. Any parameter of a QuantLib
 model may take a different value in each regime: the Vasicek mean level, the Black–Scholes volatility, the Heston
