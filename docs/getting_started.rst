@@ -9,7 +9,7 @@ exercise and date objects when it is present, and the certificates compare with 
 
 .. code-block:: bash
 
-    pip install git+https://github.com/microprediction/regimelib
+    pip install regimelib
     pip install QuantLib          # optional
 
 Importing
