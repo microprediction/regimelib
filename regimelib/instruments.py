@@ -176,10 +176,15 @@ class CouponBondOption(Instrument):
 class Swaption(Instrument):
     """European swaption on a fixed-for-floating swap: `kind` "payer" or "receiver", expiry, fixed-leg payment times
     (the first accrual starts at expiry), fixed rate, notional. A receiver swaption is a call on the coupon bond
-    struck at par; a payer swaption is the put (QuantLib: Swaption with JamshidianSwaptionEngine)."""
-    def __init__(self, kind, maturity, fixedTimes, fixedRate, notional=1.0, dayCounter=None):
+    struck at par; a payer swaption is the put (QuantLib: Swaption with JamshidianSwaptionEngine). A Bermudan
+    swaption takes `exerciseTimes` (or a QuantLib BermudanExercise as `maturity`), each on a fixed-leg date, and is
+    priced by SwitchingFDEngine (QuantLib: TreeSwaptionEngine)."""
+    def __init__(self, kind, maturity, fixedTimes, fixedRate, notional=1.0, dayCounter=None, exerciseTimes=None):
         super().__init__()
         self.isPayer = str(kind).lower() == "payer"
+        if hasattr(maturity, "dates"):                       # a QuantLib BermudanExercise
+            exerciseTimes = [_years(d, dayCounter) for d in maturity.dates()]; maturity = exerciseTimes[0]
+        self.exerciseTimes = None if exerciseTimes is None else sorted(_years(t, dayCounter) for t in exerciseTimes)
         self.maturity = _years(maturity, dayCounter); ts = [_years(t, dayCounter) for t in fixedTimes]
         self.fixedRate, self.notional = float(fixedRate), float(notional)
         cfs = [(t, notional * fixedRate * (t - (ts[i - 1] if i else self.maturity))) for i, t in enumerate(ts)]

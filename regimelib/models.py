@@ -35,6 +35,34 @@ class SwitchingVasicek(SwitchingModel):
         g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0])
         return g, gfuncs, (lambda t: pre(t, [self.r0]))
 
+    def operators(self, instrument, n, width):
+        """Short-rate grid; L_i = a (b_i - r) d_r + sigma_i^2 / 2 d_rr - r, split as L_bar plus the switched parts
+        (b_i - b_bar) a d_r and (sigma_i^2 - s2_bar) d_rr / 2. No terminal payoff: rate instruments build their own."""
+        from .firstorder import Grid1D
+        T = instrument.maturity; pi = self.chain.stationaryDistribution()
+        b, s2 = np.asarray(self.b, float), np.asarray(self.sigma, float) ** 2
+        bbar, s2bar = float(pi @ b), float(pi @ s2)
+        if isinstance(width, tuple):
+            grid = Grid1D(width[0], width[1], n)
+        else:
+            sd = math.sqrt(max(s2) / (2 * self.a)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            grid = Grid1D(self.r0 - L, self.r0 + L, n)
+        D1, D2 = grid.d1(), grid.d2(); r = grid.x
+        Adrift, Adiff = self.a * D1, 0.5 * D2
+        Lbar = sp.diags(bbar - r) @ Adrift + s2bar * Adiff - sp.diags(r)
+        # the drift forcing (b_i - b_bar) a d_r is constant in r; the diffusion forcing (s2_i - s2_bar) d_rr / 2
+        return Lbar, [Adrift, Adiff], [b, s2], grid, None, self.r0
+
+    def bondOnGrid(self, r, tau):
+        """Zero-coupon bond of maturity tau on the rate grid, one row per regime: a_j(tau) exp(-B(tau) r)."""
+        from .engines import _numericalAVector
+        from ._engine.models import vasicek_terminal
+        if tau <= 0:
+            return np.ones((self.n, len(r)))
+        g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0)
+        avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
+        return avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(r, float)[None, :])
+
 
 class SwitchingCoxIngersollRoss(SwitchingModel):
     """QuantLib CoxIngersollRoss(r0, theta, k, sigma): dr = k (theta - r) dt + sigma sqrt(r) dW. theta may switch."""

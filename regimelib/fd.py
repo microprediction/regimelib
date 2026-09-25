@@ -9,7 +9,7 @@ import math
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
-from .instruments import VanillaOption, BarrierOption
+from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption
 
 
 class SwitchingFDEngine:
@@ -65,8 +65,11 @@ class SwitchingFDEngine:
         return {"value": grid.interp(u, x0), "delta": delta, "gamma": gamma, "theta": theta}
 
     def calculate(self, instrument, results=False):
+        if isinstance(instrument, (Swaption, CouponBondOption)):
+            out = self._rateOption(instrument)
+            return out if results else out["value"]
         if not isinstance(instrument, VanillaOption):
-            raise TypeError("the switching finite-difference engine prices vanilla, American and barrier options")
+            raise TypeError("the switching finite-difference engine prices vanilla, American, barrier and Bermudan instruments")
         if isinstance(instrument, BarrierOption):
             out = self._barrier(instrument)
         else:
@@ -101,3 +104,30 @@ class SwitchingFDEngine:
             vS = self._march(BigB, np.ones(nR * gridB.n), T, fixed=(idx, 0.0))
             reb = opt.rebate * gridB.interp(vS[self.regime * gridB.n:(self.regime + 1) * gridB.n], x0)
         return {k: van[k] - res[k] + (reb if k == "value" else 0.0) for k in van}
+
+    # -- options on coupon bonds and swaps, European or Bermudan, on a short-rate grid ----------------------------
+    def _rateOption(self, inst):
+        m = self.model
+        if not hasattr(m, "bondOnGrid"):
+            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek)")
+        Big, grid, _, r0, nR = self._system(inst, self.width)
+        if isinstance(inst, Swaption):
+            exercises = inst.exerciseTimes or [inst.maturity]; isCall, K = not inst.isPayer, inst.notional
+        else:
+            exercises = [inst.maturity]; isCall, K = inst.isCall, inst.strike
+        def exerciseValue(t):
+            """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid."""
+            bond = sum(c * m.bondOnGrid(grid.x, S - t) for S, c in inst.cashflows if S > t + 1e-12)
+            return np.maximum(bond - K, 0.0) if isCall else np.maximum(K - bond, 0.0)
+        steps = self.steps
+        u = exerciseValue(exercises[-1]).ravel()
+        t_hi = exercises[-1]
+        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
+            self.steps = max(4, int(round(steps * (t_hi - t_lo) / exercises[-1])))
+            u = self._march(Big, u, t_hi - t_lo)
+            if t_lo > 0:
+                u = np.maximum(u, exerciseValue(t_lo).ravel())
+            t_hi = t_lo
+        self.steps = steps
+        blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
+        return {"value": grid.interp(u[blk], r0)}
