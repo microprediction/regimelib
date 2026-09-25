@@ -109,3 +109,79 @@ def test_vasicek_jumps_first_order_formula():
         bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=regime))
         assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)
         assert f.evaluate(f.greek("r0"), **vals) == pytest.approx(-f.evaluate(f.B * f.price, **vals), rel=1e-12)
+
+
+def test_green_kubo_derivatives_are_exact():
+    import numpy as np
+    from regimelib.firstorder import green_kubo, green_kubo_derivatives
+    Q = np.array([[-5.0, 3.0, 2.0], [4.0, -9.0, 5.0], [1.0, 6.0, -7.0]]); f = np.array([[1.0, 0.4, -0.2], [0.3, 0.9, 0.1]])
+    h = 1e-6
+    for wrt in (("q", 0, 1), ("q", 2, 0), ("f", 1, 2)):
+        dpi, dK, dM = green_kubo_derivatives(rl.RegimeChain(Q), f, wrt)
+        def at(eps):
+            Qe, fe = Q.copy(), f.copy()
+            if wrt[0] == "q":
+                Qe[wrt[1], wrt[2]] += eps; Qe[wrt[1], wrt[1]] -= eps
+            else:
+                fe[wrt[1], wrt[2]] += eps
+            ch = rl.RegimeChain(Qe); K, M = green_kubo(ch, fe); return ch.stationaryDistribution(), K, M
+        p1, K1, M1 = at(h); p0, K0, M0 = at(-h)
+        assert np.allclose(dpi, (p1 - p0) / (2 * h), atol=1e-7) and np.allclose(dK, (K1 - K0) / (2 * h), atol=1e-7)
+        assert np.allclose(dM, (M1 - M0) / (2 * h), atol=1e-7)
+
+
+def test_vasicek_first_order_parameter_greeks():
+    """dP/dtheta_i, dP/dsigma_i and dP/dq_ab from the formula, against finite differences of the engine at order 1."""
+    from regimelib.symbolic import VasicekBondFirstOrder
+    Q = [[-5.0, 3.0, 2.0], [4.0, -9.0, 5.0], [1.0, 6.0, -7.0]]; kappa_, thetas, sigmas, r0_, T_ = 0.5, [0.08, 0.05, 0.01], [0.015, 0.01, 0.006], 0.03, 4.0
+    f = VasicekBondFirstOrder()
+    def price(Qm, th, sg):
+        m = rl.SwitchingVasicek(rl.RegimeChain(Qm), r0_, kappa_, th, sg); b = rl.ZeroCouponBond(T_)
+        b.setPricingEngine(rl.FastSwitchingEngine(m, order=1, regime=1)); return b.NPV()
+    h = 1e-5
+    params = dict(r0=r0_, kappa=kappa_, T=T_, thetas=thetas, sigmas=sigmas)
+    chain = rl.RegimeChain(Q)
+    for wrt in (("theta", 0), ("theta", 2), ("sigma", 1), ("q", 0, 1), ("q", 2, 1)):
+        g = f.parameterGreek(chain, wrt, regime=1, **params)
+        def bumped(eps):
+            Qm = [row[:] for row in Q]; th = list(thetas); sg = list(sigmas)
+            if wrt[0] == "q":
+                Qm[wrt[1]][wrt[2]] += eps; Qm[wrt[1]][wrt[1]] -= eps
+            elif wrt[0] == "theta":
+                th[wrt[1]] += eps
+            else:
+                sg[wrt[1]] += eps
+            return price(Qm, th, sg)
+        fd = (bumped(h) - bumped(-h)) / (2 * h)
+        assert g == pytest.approx(fd, rel=1e-5), wrt
+
+
+def test_cir_and_jumps_parameter_greeks():
+    from regimelib.symbolic import CIRBondFirstOrder, VasicekJumpsBondFirstOrder
+    Q = [[-5.0, 3.0, 2.0], [4.0, -9.0, 5.0], [1.0, 6.0, -7.0]]; chain = rl.RegimeChain(Q); h = 1e-5
+    def bump(wrt, eps, Qm, lists):
+        Qm = [row[:] for row in Qm]; lists = {k: list(v) for k, v in lists.items()}
+        if wrt[0] == "q":
+            Qm[wrt[1]][wrt[2]] += eps; Qm[wrt[1]][wrt[1]] -= eps
+        else:
+            lists[wrt[0]][wrt[1]] += eps
+        return Qm, lists
+    # CIR
+    k_, thetas, sigma_, r0_, T_ = 0.6, [0.06, 0.03, 0.01], 0.08, 0.03, 4.0
+    f = CIRBondFirstOrder()
+    def cir_price(Qm, L):
+        b = rl.ZeroCouponBond(T_); b.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingCoxIngersollRoss(rl.RegimeChain(Qm), r0_, L["theta"], k_, sigma_), order=1, regime=2)); return b.NPV()
+    for wrt in (("theta", 1), ("q", 1, 0)):
+        g = f.parameterGreek(chain, wrt, regime=2, r0=r0_, k=k_, sigma=sigma_, T=T_, thetas=thetas)
+        fd = (cir_price(*bump(wrt, h, Q, {"theta": thetas})) - cir_price(*bump(wrt, -h, Q, {"theta": thetas}))) / (2 * h)
+        assert g == pytest.approx(fd, rel=1e-5), wrt
+    # jumps
+    kappa_, thetas, sigmas, lams, m_, T_ = 0.5, [0.06, 0.03, 0.01], [0.015, 0.01, 0.006], [2.0, 0.5, 0.1], 0.01, 3.0
+    f = VasicekJumpsBondFirstOrder()
+    def jump_price(Qm, L):
+        b = rl.ZeroCouponBond(T_); b.setPricingEngine(rl.FastSwitchingEngine(rl.SwitchingVasicekJumps(rl.RegimeChain(Qm), r0_, kappa_, L["theta"], L["sigma"], L["intensity"], m_), order=1, regime=0)); return b.NPV()
+    lists = {"theta": thetas, "sigma": sigmas, "intensity": lams}
+    for wrt in (("intensity", 0), ("sigma", 2), ("q", 0, 2)):
+        g = f.parameterGreek(chain, wrt, regime=0, r0=r0_, kappa=kappa_, m=m_, T=T_, thetas=thetas, sigmas=sigmas, intensities=lams)
+        fd = (jump_price(*bump(wrt, h, Q, lists)) - jump_price(*bump(wrt, -h, Q, lists))) / (2 * h)
+        assert g == pytest.approx(fd, rel=1e-4), wrt

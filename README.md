@@ -96,12 +96,12 @@ as a sympy expression and `.greek('r0')`, `.greek('theta1')`, `.greek('lam')`, `
 derivatives; `.evaluate(expr, **values)` evaluates one. The formula equals the engine at order 2 to 1e-12, and the
 symbolic greeks match finite differences of the numerical solution (`tests/test_symbolic.py`).
 `regimelib.symbolic.VasicekBondFirstOrder`, `CIRBondFirstOrder` and `VasicekJumpsBondFirstOrder` give the first-order bond under any finite chain (Green–Kubo
-and memory coefficients from `coefficients(chain, ...)`, the CIR integrals closed by the Riccati identity). `regimelib.symbolic.TwoStateConstantForcing` is the exact, all-orders solution of the two-regime reduced system with
+and memory coefficients from `coefficients(chain, ...)`, the CIR integrals closed by the Riccati identity); `parameterGreek(chain, wrt, ...)` gives dP/dθᵢ, dP/dσᵢ, dP/dλᵢ and dP/dQ_ab exactly by the chain rule through the coefficients. `regimelib.symbolic.TwoStateConstantForcing` is the exact, all-orders solution of the two-regime reduced system with
 constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), which is the closed-form characteristic
 function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: greeks in model parameters from the closed forms; a non-uniform grid for the two-factor engines.
+Roadmap: a non-uniform grid for the two-factor engines; parameter greeks for the option formulas.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
 

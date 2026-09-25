@@ -34,6 +34,20 @@ the jump integrals by the substitution ``u = exp(-kappa t)``.
     numbers = f.coefficients(chain, kappa_=0.5, thetas=[0.08, 0.05, 0.01], sigmas=[0.015, 0.01, 0.006], regime=0)
     f.evaluate(f.price, r0=0.03, kappa=0.5, T=4.0, **numbers)
 
+.. function:: parameterGreek(chain, wrt, regime=0, **params)
+
+Greeks in the model's own parameters: ``wrt = ("theta", i)``, ``("sigma", i)``, ``("intensity", i)`` for a
+per-regime parameter or ``("q", a, b)`` for the switching rate out of regime ``a`` into ``b``. The chain rule runs
+through the coefficients, whose derivatives are exact — the Green–Kubo matrix is bilinear in the forcing, and the
+group inverse and the stationary distribution vary with the generator as ``dQ# = -Q# dQ Q# + 1 pi dQ (Q#)^2 +
+(Q#)^2 dQ 1 pi`` and ``dpi = -pi dQ Q#``. Checked against finite differences of the engine at order 1.
+
+.. code-block:: python
+
+    params = dict(r0=0.03, kappa=0.5, T=4.0, thetas=[0.08, 0.05, 0.01], sigmas=[0.015, 0.01, 0.006])
+    f.parameterGreek(chain, ("theta", 2), regime=1, **params)      # dP / d theta_2
+    f.parameterGreek(chain, ("q", 0, 1), regime=1, **params)       # dP / d Q_01
+
 .. class:: rl.symbolic.TwoStateConstantForcing()
 
 The exact, all-orders solution of the two-regime reduced system with constant forcing — a 2 × 2 matrix exponential

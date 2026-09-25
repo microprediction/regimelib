@@ -74,10 +74,37 @@ class VasicekTwoStateBond:
 
 
 # ---------------------------------------------------------------- any number of regimes, first order
+class _FirstOrderParameterGreeks:
+    """dP/d(parameter) for a first-order bond formula: the chain rule through the coefficients that the chain
+    contributes, with the coefficient derivatives exact (green_kubo_derivatives) and the partial derivatives of
+    the formula symbolic. `wrt` is ("q", a, b) for a switching rate or (name, i) for a per-regime parameter."""
+    def _forcings(self, **params):
+        raise NotImplementedError
+
+    def parameterGreek(self, chain, wrt, regime=0, **params):
+        import numpy as np
+        from .firstorder import green_kubo, green_kubo_derivatives
+        names, F, dF = self._forcings(**params)                          # coefficient names, rows of forcing, d rows / d param
+        pi = chain.stationaryDistribution(); K, M = green_kubo(chain, F)
+        if wrt[0] == "q":
+            dpi, dK, dM = green_kubo_derivatives(chain, F, wrt); dFrows = np.zeros_like(F)
+        else:
+            j, i = names.index(wrt[0]), wrt[1]
+            dpi = np.zeros(len(pi)); dFrows = np.zeros_like(F); dFrows[j, i] = dF[wrt[0]](i, **params)
+            _, dK, dM = green_kubo_derivatives(chain, F, ("f", j, i)); dK = dK * dFrows[j, i]; dM = dM * dFrows[j, i]
+        coef = self.coefficientsFrom(pi, K, M, F, regime, **params)
+        dcoef = self.coefficientsFrom(dpi, dK, dM, F, regime, dF=dFrows, basePi=pi, linear=True, **params)
+        values = dict(params, **coef)
+        total = 0.0
+        for name, dv in dcoef.items():
+            if dv:
+                total += self.evaluate(sp.diff(self.price, self.symbols[name]), **values) * dv
+        return total
+
 Kcc, Kcd, Kdd, mc, md, thbar, s2bar = sp.symbols("K_cc K_cd K_dd m_c m_d thetabar sigma2bar", real=True)   # K_cd is the symmetric part (K_cd + K_dc) / 2
 
 
-class VasicekBondFirstOrder:
+class VasicekBondFirstOrder(_FirstOrderParameterGreeks):
     """Vasicek bond under any finite chain, first order in the holding time, as a formula.
 
     g_i(t) = c_i B(t) + d_i B(t)^2 with c_i = -kappa theta_i, d_i = sigma_i^2 / 2. The chain enters through
@@ -111,6 +138,26 @@ class VasicekBondFirstOrder:
         K, M = green_kubo(chain, [c, d]); pi = chain.stationaryDistribution()
         return dict(thetabar=float(pi @ thetas), sigma2bar=float(pi @ np.asarray(sigmas) ** 2),
                     Kcc=float(K[0, 0]), Kcd=float(0.5 * (K[0, 1] + K[1, 0])), Kdd=float(K[1, 1]), mc=float(-M[0, regime]), md=float(-M[1, regime]))
+
+    # parameter greeks: the forcing rows c = -kappa theta, d = sigma^2 / 2 and their derivatives per regime
+    def _forcings(self, kappa, thetas, sigmas, **_):
+        import numpy as np
+        F = np.array([-kappa * np.asarray(thetas, float), 0.5 * np.asarray(sigmas, float) ** 2])
+        dF = {"theta": lambda i, kappa, **k: -kappa, "sigma": lambda i, sigmas, **k: float(sigmas[i])}
+        return ["theta", "sigma"], F, dF
+
+    @staticmethod
+    def coefficientsFrom(pi, K, M, F, regime, dF=None, pi_=None, linear=False, **kw):
+        """thetabar = pi . theta = -(pi . c) / kappa and sigma2bar = 2 pi . d, both linear in (pi, F)."""
+        import numpy as np
+        kappa_ = kw["kappa"]
+        if linear:
+            base = kw["basePi"]; dF = dF if dF is not None else np.zeros_like(F)
+            tb = -(pi @ F[0] + base @ dF[0]) / kappa_; s2 = 2 * (pi @ F[1] + base @ dF[1])
+        else:
+            tb, s2 = -(pi @ F[0]) / kappa_, 2 * (pi @ F[1])
+        return dict(thetabar=float(tb), sigma2bar=float(s2), Kcc=float(K[0, 0]), Kcd=float(0.5 * (K[0, 1] + K[1, 0])),
+                    Kdd=float(K[1, 1]), mc=float(-M[0, regime]), md=float(-M[1, regime]))
 
     def greek(self, *wrt):
         e = self.price
@@ -168,7 +215,7 @@ class TwoStateConstantForcing:
 
 
 # ---------------------------------------------------------------- CIR with a switching mean level, first order
-class CIRBondFirstOrder:
+class CIRBondFirstOrder(_FirstOrderParameterGreeks):
     """CIR bond dr = k (theta_y - r) dt + sigma sqrt(r) dW under any finite chain, first order in the holding time,
     as a formula. Only the mean level switches, so g_i(t) = c_i B(t) with c_i = -k theta_i and B the Riccati solution
     B(t) = 2 (e^{ht} - 1) / ((h + k)(e^{ht} - 1) + 2h), h = sqrt(k^2 + 2 sigma^2). With K_cc the Green-Kubo integral
@@ -203,6 +250,20 @@ class CIRBondFirstOrder:
         K, M = green_kubo(chain, [c]); pi = chain.stationaryDistribution()
         return dict(thetabar=float(pi @ thetas), Kcc=float(K[0, 0]), mc=float(-M[0, regime]))
 
+    def _forcings(self, k, thetas, **_):
+        import numpy as np
+        return ["theta"], np.array([-k * np.asarray(thetas, float)]), {"theta": lambda i, k, **kw: -k}
+
+    @staticmethod
+    def coefficientsFrom(pi, K, M, F, regime, dF=None, basePi=None, linear=False, **kw):
+        import numpy as np
+        k = kw["k"]
+        if linear:
+            dF = dF if dF is not None else np.zeros_like(F); tb = -(pi @ F[0] + basePi @ dF[0]) / k
+        else:
+            tb = -(pi @ F[0]) / k
+        return dict(thetabar=float(tb), Kcc=float(K[0, 0]), mc=float(-M[0, regime]))
+
     def greek(self, *wrt):
         e = self.price
         for name in wrt:
@@ -217,7 +278,7 @@ class CIRBondFirstOrder:
 
 
 # ---------------------------------------------------------------- Vasicek with jumps at a switching intensity, first order
-class VasicekJumpsBondFirstOrder:
+class VasicekJumpsBondFirstOrder(_FirstOrderParameterGreeks):
     """Vasicek with exponential jumps of mean m at intensity l_y (SwitchingVasicekJumps) under any finite chain,
     first order in the holding time, as a formula. The forcing g_i = c_i B + d_i B^2 + l_i J with c_i = -kappa theta_i,
     d_i = sigma_i^2 / 2 and J(t) = 1 / (1 + m B(t)) - 1, so three Green-Kubo entries per pair (symmetric parts) and three
@@ -259,6 +320,23 @@ class VasicekJumpsBondFirstOrder:
         c = -kappa_ * np.asarray(thetas, float); d = 0.5 * np.asarray(sigmas, float) ** 2; l = np.asarray(intensities, float)
         K, M = green_kubo(chain, [c, d, l]); pi = chain.stationaryDistribution(); sym = lambda i, j: float(0.5 * (K[i, j] + K[j, i]))
         return dict(cbar=float(pi @ c), dbar=float(pi @ d), lbar=float(pi @ l), Kcc=float(K[0, 0]), Kcd=sym(0, 1), Kdd=float(K[1, 1]),
+                    Kcl=sym(0, 2), Kdl=sym(1, 2), Kll=float(K[2, 2]), mc=float(-M[0, regime]), md=float(-M[1, regime]), ml=float(-M[2, regime]))
+
+    def _forcings(self, kappa, thetas, sigmas, intensities, **_):
+        import numpy as np
+        F = np.array([-kappa * np.asarray(thetas, float), 0.5 * np.asarray(sigmas, float) ** 2, np.asarray(intensities, float)])
+        dF = {"theta": lambda i, kappa, **k: -kappa, "sigma": lambda i, sigmas, **k: float(sigmas[i]), "intensity": lambda i, **k: 1.0}
+        return ["theta", "sigma", "intensity"], F, dF
+
+    @staticmethod
+    def coefficientsFrom(pi, K, M, F, regime, dF=None, basePi=None, linear=False, **kw):
+        import numpy as np
+        sym = lambda i, j: float(0.5 * (K[i, j] + K[j, i]))
+        if linear:
+            dF = dF if dF is not None else np.zeros_like(F); bars = [float(pi @ F[r] + basePi @ dF[r]) for r in range(3)]
+        else:
+            bars = [float(pi @ F[r]) for r in range(3)]
+        return dict(cbar=bars[0], dbar=bars[1], lbar=bars[2], Kcc=float(K[0, 0]), Kcd=sym(0, 1), Kdd=float(K[1, 1]),
                     Kcl=sym(0, 2), Kdl=sym(1, 2), Kll=float(K[2, 2]), mc=float(-M[0, regime]), md=float(-M[1, regime]), ml=float(-M[2, regime]))
 
     def greek(self, *wrt):

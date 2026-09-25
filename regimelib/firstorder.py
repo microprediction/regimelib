@@ -24,6 +24,32 @@ def green_kubo(chain, f):
     return K, M
 
 
+def green_kubo_derivatives(chain, f, wrt):
+    """Exact derivatives of the stationary distribution, the Green-Kubo matrix and the memory vectors with respect
+    to one parameter: wrt = ("q", a, b) for the switching rate Q_ab (Q_aa moves with it) or ("f", j, i) for the
+    forcing coefficient f_j in regime i. Returns (dpi, dK, dM). For a rate the group inverse varies as
+    dQ# = -Q# dQ Q# + 1 pi dQ (Q#)^2 + (Q#)^2 dQ 1 pi and pi as dpi = -pi dQ Q#."""
+    Q = chain.generator; n = Q.shape[0]; pi = chain.stationaryDistribution()
+    f = np.atleast_2d(np.asarray(f, float)); ft = f - (f @ pi)[:, None]
+    Qs = np.linalg.inv(Q - np.outer(np.ones(n), pi)) + np.outer(np.ones(n), pi)
+    M = np.array([Qs @ ft[k] for k in range(len(f))])
+    if wrt[0] == "q":
+        a, b = wrt[1], wrt[2]
+        dQ = np.zeros((n, n)); dQ[a, b] += 1.0; dQ[a, a] -= 1.0
+        dpi = -pi @ dQ @ Qs
+        P1 = np.outer(np.ones(n), pi)
+        dQs = -Qs @ dQ @ Qs + P1 @ dQ @ (Qs @ Qs) + (Qs @ Qs) @ dQ @ P1
+        dft = -np.outer(f @ dpi, np.ones(n))
+    else:
+        j, i = wrt[1], wrt[2]
+        dpi = np.zeros(n); dQs = np.zeros((n, n))
+        dft = np.zeros_like(f); dft[j] = np.eye(n)[i] - pi[i]
+    dM = np.array([dQs @ ft[k] + Qs @ dft[k] for k in range(len(f))])
+    dK = -np.array([[dpi @ (ft[j] * M[k]) + pi @ (dft[j] * M[k]) + pi @ (ft[j] * dM[k]) for k in range(len(f))]
+                    for j in range(len(f))])
+    return dpi, dK, dM
+
+
 class Grid1D:
     def __init__(self, lo, hi, n):
         self.x = np.linspace(lo, hi, n); self.h = self.x[1] - self.x[0]; self.n = n
