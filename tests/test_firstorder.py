@@ -20,6 +20,7 @@ def test_black_scholes_first_order_matches_exact_engine():
     assert opt.NPV() == pytest.approx(ref, rel=2e-4)
 
 
+@pytest.mark.slow
 def test_cev_first_order_against_switching_pde():
     model = rl.SwitchingCEVProcess(CHAIN, 100.0, 0.02, 0.0, [2.5, 1.2], 0.6)      # sigma S^0.6: vol 0.16 and 0.08 at S = 100
     opt = rl.VanillaOption(("call", 100.0), maturity=1.0)

@@ -98,5 +98,7 @@ Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the 
 correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; bond options under G2; Bermudan swaptions on the CIR grid; greeks in
 model parameters from the closed forms.
 
+Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
+
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
 [microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.

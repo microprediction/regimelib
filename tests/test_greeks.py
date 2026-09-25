@@ -12,6 +12,7 @@ def _fd(f, x, h):
     return (4 * d(h / 2) - d(h)) / 3, (4 * g(h / 2) - g(h)) / 3
 
 
+@pytest.mark.slow
 def test_heston_delta_gamma_vega0():
     args = dict(r=0.02, q=0.01, v0=0.04, kappa=1.5, theta=[0.09, 0.02], sigma=0.4, rho=-0.6)
     opt = rl.VanillaOption(("put", 100.0), maturity=1.0)
@@ -46,6 +47,7 @@ def test_bond_delta_gamma():
         assert g["delta"] == pytest.approx(d, rel=5e-6) and g["gamma"] == pytest.approx(gm, rel=1e-4)
 
 
+@pytest.mark.slow
 def test_instrument_methods_in_quantlib_mold():
     model = rl.SwitchingHestonModel(CHAIN, 100.0, 0.02, 0.01, 0.04, 1.5, [0.09, 0.02], 0.4, -0.6)
     # theta and rho differentiate the exact reduced system; against the truncated series they differ by its remainder,

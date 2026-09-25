@@ -20,6 +20,7 @@ def test_four_regime_cycle_vasicek():
     assert abs(bond.NPV() - ref) < 4 * mc.standardError
 
 
+@pytest.mark.slow
 def test_three_regime_heston_frozen_and_switching():
     ref_date = ql.Date(1, 1, 2020); ql.Settings.instance().evaluationDate = ref_date
     S0, r, q, v0, kappa, xi, rho, K, T = 100.0, 0.02, 0.0, 0.04, 1.5, 0.4, -0.6, 100.0, 1.0
