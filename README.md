@@ -31,7 +31,7 @@ print(opt.NPV())
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 | `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
 | `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
-| `Vasicek.discountBondOption(type, K, T, S)` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek` or `SwitchingHullWhite` | `b`, `sigma` |
+| `Vasicek.discountBondOption(type, K, T, S)`, `G2.discountBondOption` | `ZeroCouponBondOption(type, K, T, S)` under `SwitchingVasicek`, `SwitchingHullWhite` or `SwitchingG2` (caps and floors likewise) | `b`, `sigma`; `sigma`, `eta`, `rho` |
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
 
 Instruments, with the QuantLib engine that the frozen limit is checked against:
@@ -95,7 +95,7 @@ function of every two-regime Black–Scholes, Merton or variance-gamma model: `.
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
 Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
-correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; bond options under G2; Bermudan swaptions on the CIR grid; greeks in
+correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; swaptions under G2; Bermudan swaptions on the CIR grid; greeks in
 model parameters from the closed forms.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.

@@ -9,7 +9,8 @@ Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher ord
 from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
-from .models import SwitchingVasicek, SwitchingHullWhite
+from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .g2options import g2_zcb_call
 
 
 def _gauss(U, n):
@@ -135,8 +136,11 @@ class SwitchingEngine:
             shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
             e0T = m.discount(T) * math.exp(-shift(T)); c = m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))
             call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+        elif isinstance(m, SwitchingG2):
+            e0T, c = m.deterministicDiscount(0.0, T), m.deterministicDiscount(T, S)
+            call = e0T * c * g2_zcb_call(T, S, K / c, self.regime, m.a, m.b, m.sigma, m.eta, m.rho, m.chain.generator, order=self._order())
         else:
-            raise TypeError("bond options are priced under SwitchingVasicek or SwitchingHullWhite")
+            raise TypeError("bond options are priced under SwitchingVasicek, SwitchingHullWhite or SwitchingG2")
         if opt.isCall:
             return call
         bond = lambda t: self.calculate(ZeroCouponBond(t))          # put-call parity: C - P = P(0,S) - K P(0,T)

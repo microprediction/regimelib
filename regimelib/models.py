@@ -272,6 +272,11 @@ class SwitchingG2(SwitchingModel):
         pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
         return g, gfuncs, pre
 
+    def deterministicDiscount(self, t1, t2):
+        """exp(-int_{t1}^{t2} phi): the curve factor and the averaged covariance term."""
+        _, _, pre = self.bondForcing(t2)
+        return pre(t2) / pre(t1)
+
 
 # ---------------------------------------------------------------- operator form for the first-order tier
 def _bs_operators(self, instrument, n, width):
