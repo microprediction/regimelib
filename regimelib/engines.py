@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite
@@ -86,6 +86,8 @@ class SwitchingEngine:
             B = self._bondB(T)
             if B is not None:                                     # sensitivities to the state r0
                 out.update(delta=-B * P, gamma=B * B * P)
+        elif isinstance(instrument, ContinuousGeometricAsianOption):
+            out = self._geometricAsian(instrument)
         elif isinstance(instrument, VanillaOption):
             out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
         elif isinstance(instrument, CouponBond):
@@ -156,6 +158,26 @@ class SwitchingEngine:
             return call
         bond = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in cashflows)       # parity: C - P = bond - K P(0,T)
         return call - bond + K * self.calculate(ZeroCouponBond(T))
+
+    def _geometricAsian(self, opt):
+        """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
+        martingale characteristic function is phi_Y(z) exp(-i z log(F_G / S0))."""
+        m, T, K = self.model, opt.maturity, opt.strike
+        if not hasattr(m, "averageForcing"):
+            raise TypeError("the geometric Asian option needs a model with averageForcing (Black-Scholes)")
+        def phiY(z):
+            g, gfuncs = m.averageForcing(z, T)
+            return self._aVector(g, gfuncs, T)[0][self.regime]
+        FG = m.S0 * phiY(-1j).real; k = math.log(FG / K); lf = math.log(FG / m.S0)
+        U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
+        I0 = 0.0
+        for u, w in zip(us, ws):
+            z = u - 0.5j
+            e = cmath.exp(1j * u * k) * phiY(z) * cmath.exp(-1j * z * lf)
+            I0 += w * e.real / (u * u + 0.25)
+        disc = math.exp(-m.r * T)
+        call = disc * (FG - math.sqrt(FG * K) / math.pi * I0)
+        return {"value": call if opt.isCall else call - disc * (FG - K)}
 
     def _order(self):
         return None
@@ -266,17 +288,19 @@ class FastSwitchingEngine(SwitchingEngine):
     """order: an integer, or None to add terms until successive orders agree to `tol` (relative) or the next term
     stops shrinking, the best truncation of an asymptotic series. `maxOrder` bounds the search. After calculate(),
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
-    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12):
+    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12):
         super().__init__(model, regime, nodes)
-        self.order, self.tol, self.maxOrder = order, tol, maxOrder
+        self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
 
     def _aVector(self, g, gfuncs, T, a0=None):
         """a(T) over all regimes through the engine's order, with the size of the last two terms recorded for the
-        convergence diagnostics; where the expansion factor over the averaged value is not moderate (large forcing at
-        high frequency) the averaged value is used at that node and `tailFallbacks` is incremented."""
+        convergence diagnostics. The series is asymptotic in the holding time times the forcing, so at Fourier nodes
+        where the forcing is large it diverges (non-finite, far from the averaged value, or a last term no smaller than
+        the one before): there the reduced system is solved numerically instead and `numericalNodes` counts them."""
         N = self._order()
-        fs = FastSwitch(self.model.chain.generator, g, order=N, a0=a0)
+        Q = self.model.chain.generator
+        fs = FastSwitch(Q, g, order=N, a0=a0)
         base = np.asarray(fs.a(T, 0), complex)
         with np.errstate(all="ignore"):
             try:
@@ -285,20 +309,24 @@ class FastSwitchingEngine(SwitchingEngine):
                 prev2 = np.asarray(fs.a(T, N - 2), complex) if N >= 2 else prev
             except (OverflowError, FloatingPointError, ValueError):
                 avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
-        ok = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
-        if not ok:
-            self._diag["tailFallbacks"] += 1
-            self._diag["tailWeight"] = max(self._diag["tailWeight"], float(np.max(np.abs(base))))
-            avec = base
-        else:
-            i = self.regime; scale = max(abs(avec[i]), 1e-300)
+        i = self.regime
+        finite = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
+        matters = abs(base[i]) > 1e-8 * self._diag.get("phiScale", 1.0)
+        if finite:
+            scale = max(abs(avec[i]), 1e-300)
             last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
-            if abs(base[i]) > 1e-8 * self._diag.get("phiScale", 1.0):   # only nodes that matter
-                self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
-                if N >= 2 and last >= before and last > 1e-14:
-                    self._diag["notDecreasing"] = True
+            diverging = N >= 2 and last >= before and last > 1e-12
+        else:
+            last, diverging = math.inf, True
+        if diverging:
+            self._diag["numericalNodes"] += 1
+            if matters:
+                self._diag["numericalWeight"] = max(self._diag["numericalWeight"], float(abs(base[i])))
+            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+        elif matters:
+            self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
         gT = np.array([gi.value(T) for gi in g], complex)
-        return avec, self.model.chain.generator @ avec + gT * avec
+        return avec, Q @ avec + gT * avec
 
     def _a(self, g, gfuncs, T, a0=None):
         return self._aVector(g, gfuncs, T, a0)[0][self.regime]
@@ -307,11 +335,11 @@ class FastSwitchingEngine(SwitchingEngine):
         return self.order if self.order is not None else self.maxOrder
 
     def calculate(self, instrument, results=False):
-        self._diag = dict(lastTerm=0.0, notDecreasing=False, tailFallbacks=0, tailWeight=0.0, phiScale=1.0)
+        self._diag = dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0)
         out = self._calculateOrders(instrument)
         eps = self.model.chain.meanHoldingTime()
         d = dict(epsilon=eps, orderUsed=self.orderUsed, lastTermRelative=self._diag["lastTerm"],
-                 tailFallbacks=self._diag["tailFallbacks"])
+                 numericalNodes=self._diag["numericalNodes"])
         out["diagnostics"] = d
         if self._diag["notDecreasing"]:
             warnings.warn(f"the fast-switching expansion is not converging at order {self.orderUsed}: the last term "
@@ -322,10 +350,10 @@ class FastSwitchingEngine(SwitchingEngine):
             warnings.warn(f"the fast-switching expansion at order {self.orderUsed} is rough: the last term is "
                           f"{d['lastTermRelative']:.1e} of the value (holding time {eps:.3g}). Raise the order or use "
                           "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=3)
-        if self._diag["tailFallbacks"] and self._diag["tailWeight"] > 1e-8:
-            warnings.warn(f"the expansion was replaced by the averaged value at {self._diag['tailFallbacks']} Fourier "
-                          f"nodes where it diverged, the largest with characteristic function {self._diag['tailWeight']:.1e}; "
-                          "the price may be affected. Use NumericalSwitchingEngine to check.", ExpansionWarning, stacklevel=3)
+        if self._diag["numericalNodes"] and self._diag["numericalWeight"] > 1e-8:
+            warnings.warn(f"the expansion diverged at {self._diag['numericalNodes']} Fourier nodes (large forcing at high "
+                          f"frequency, the largest with characteristic function {self._diag['numericalWeight']:.1e}), where "
+                          "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=3)
         return out if results else out["value"]
 
     def _calculateOrders(self, instrument):
@@ -353,6 +381,17 @@ class FastSwitchingEngine(SwitchingEngine):
         return prev_out
 
 
+def _numericalAVector(Q, g, gfuncs, T, rtol=1e-12, a0=None):
+    """a(T) from the reduced system without expansion: the matrix exponential for constant forcing, else the ODE."""
+    const = [_constantValue(gi) for gi in g]
+    if all(c is not None for c in const):
+        from scipy.linalg import expm
+        gT = np.array(const, complex)
+        a0 = np.ones(len(g), complex) if a0 is None else np.asarray(a0, complex)
+        return expm((Q + np.diag(gT)) * T) @ a0
+    return np.asarray(numerical_a_callable(T, Q, gfuncs, rtol=rtol, a0=a0), complex)
+
+
 class NumericalSwitchingEngine(SwitchingEngine):
     def __init__(self, model, regime=0, nodes=96, rtol=1e-12):
         super().__init__(model, regime, nodes)
@@ -363,13 +402,9 @@ class NumericalSwitchingEngine(SwitchingEngine):
 
     def _aVector(self, g, gfuncs, T, a0=None):
         Q = self.model.chain.generator
-        const = [_constantValue(gi) for gi in g]
-        if all(c is not None for c in const):                  # constant forcing: a(T) = exp((Q + diag g) T) a0 exactly
-            from scipy.linalg import expm
-            gT = np.array(const, complex)
-            a0 = np.ones(len(g), complex) if a0 is None else np.asarray(a0, complex)
-            avec = expm((Q + np.diag(gT)) * T) @ a0
-            return avec, Q @ avec + gT * avec
+        avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+        gT = np.array([f(T) for f in gfuncs], complex)
+        return avec, Q @ avec + gT * avec
         avec = np.asarray(numerical_a_callable(T, Q, gfuncs, rtol=self.rtol, a0=a0), complex)
         gT = np.array([f(T) for f in gfuncs], complex)
         return avec, Q @ avec + gT * avec

@@ -42,6 +42,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 | `VanillaOption` + `AnalyticEuropeanEngine`, `AnalyticHestonEngine`, ... | `VanillaOption(payoff, exercise)` with plain, cash-or-nothing and asset-or-nothing payoffs, `impliedVolatility()` | `FastSwitchingEngine`, `NumericalSwitchingEngine` (Lewis) |
 | `VanillaOption` + `FdBlackScholesVanillaEngine` (American) | `VanillaOption(payoff, AmericanExercise)` | `SwitchingFDEngine`: Rannacher then Crank–Nicolson on the coupled regime system, projection each step |
 | `BarrierOption` + `AnalyticBarrierEngine` | `BarrierOption(type, barrier, rebate, payoff, exercise)` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
+| `ContinuousAveragingAsianOption(Geometric)` + `AnalyticContinuousGeometricAveragePriceAsianEngine` | `ContinuousGeometricAsianOption(payoff, exercise)` | the time average of the log price is a quadratic forcing in time to maturity; `FastSwitchingEngine`, `NumericalSwitchingEngine` |
 | `Swaption` + `JamshidianSwaptionEngine` | `Swaption(kind, expiry, fixedTimes, fixedRate, notional)`, `CouponBondOption(kind, K, T, cashflows)` | Jamshidian's decomposition conditioned on the regime at expiry |
 | `Cap`/`Floor` + `AnalyticCapFloorEngine` | `CapFloor(kind, times, strike, notional)` | caplet = (1 + τK) × put on the zero-coupon bond |
 | `HestonModelHelper`, `model.calibrate(helpers, ...)` | `VolatilityHelper(T, K, vol)`, `calibrate(model, helpers, ["sigma", "chain"])` | least squares on relative price (or implied vol) errors; terminal vectors shared across strikes |
@@ -51,10 +52,13 @@ Instruments accept QuantLib payoff and exercise objects or plain `("call", strik
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
 with the initial layer; `order=None` adds terms until successive orders agree to `tol` or the series stops improving
 (`orderUsed` and `lastIncrement` are set after `NPV()`). The engine raises an `ExpansionWarning` when the last term is
-not smaller than the one before it, when it is more than a thousandth of the value, or when the expansion had to be
-replaced by the averaged value at a Fourier node that mattered; `instrument._result('diagnostics')` gives the holding
-time, the order used, the relative size of the last term and the fallback count; `NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` numerically. Vanilla
-options use Lewis's formula with a frequency cutoff found from the averaged model's characteristic function.
+not smaller than the one before it or when it is more than a thousandth of the value. The series is asymptotic in the
+holding time times the forcing, so at Fourier nodes of high frequency it diverges; there the engine solves the reduced
+system numerically instead and says so in a warning when those nodes carry weight. `instrument._result('diagnostics')`
+gives the holding time, the order used, the relative size of the last term and the count of numerical nodes.
+`NumericalSwitchingEngine(model, regime)` solves `a' = (Q + diag g) a` without expansion (the matrix exponential for
+constant forcing, an ODE solver otherwise), memoising the terminal vectors across strikes. Vanilla options use Lewis's
+formula with a frequency cutoff found from the averaged model's characteristic function.
 
 Engines also include `MonteCarloSwitchingEngine(model, regime, paths, seed)`, a grid-free referee that samples regime paths exactly and prices each path in closed form (Vasicek bonds, Black-Scholes options), with `standardError` set after `NPV()`.
 

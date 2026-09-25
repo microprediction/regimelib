@@ -127,6 +127,16 @@ class BarrierOption(VanillaOption):
         self.isUp, self.isKnockOut = bt.startswith("up"), bt.endswith("out")
 
 
+class ContinuousGeometricAsianOption(VanillaOption):
+    """Fixed-strike option on the continuous geometric average of the price from now to expiry
+    (QuantLib: ContinuousAveragingAsianOption(Average.Geometric, payoff, exercise) with
+    AnalyticContinuousGeometricAveragePriceAsianEngine)."""
+    def __init__(self, payoff, exercise=None, maturity=None, dayCounter=None):
+        super().__init__(payoff, exercise, maturity, dayCounter)
+        if self.payoffType != "vanilla" or self.isAmerican:
+            raise ValueError("the geometric Asian option is European with a plain payoff")
+
+
 class CouponBond(Instrument):
     """Fixed cash flows: a list of (time, amount), or QuantLib-style (faceAmount, couponRate, times) with the last time
     carrying the face. Priced as the sum of zero-coupon bonds; delta and gamma in r0 add up the same way."""

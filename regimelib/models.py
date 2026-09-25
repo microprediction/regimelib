@@ -64,6 +64,16 @@ class SwitchingBlackScholesProcess(SwitchingModel):
         g, gfuncs = _m.bs_switching(u, 0.0, self.sigma)
         return g, gfuncs, (lambda: 1.0)
 
+    def averageForcing(self, u, T):
+        """g_i(tau) for E exp(i u Y), Y = (1/T) int_0^T log(S_t / S_0) dt = int_0^T (1 - t/T) d log S_t: the weight
+        (1 - t/T) multiplies the drift and squares against the variance. The reduced system runs in time to
+        maturity tau = T - t, where the weight is tau / T."""
+        mu = self.r - self.q
+        def make(sig):
+            return lambda tau: 1j * u * (mu - sig * sig / 2) * (tau / T) - u * u * sig * sig * (tau / T) ** 2 / 2
+        fs = [make(float(sig)) for sig in np.atleast_1d(self.sigma)]
+        return [Cheb.fit(f, T, deg=8) for f in fs], fs
+
 
 class SwitchingHestonModel(SwitchingModel):
     """QuantLib HestonModel / HestonProcess(r, q, S0, v0, kappa, theta, sigma, rho); the long-run variance theta may switch."""

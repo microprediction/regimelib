@@ -15,7 +15,7 @@ def test_slow_chain_warns_and_fast_chain_does_not():
         warnings.simplefilter("error")
         v = bond.NPV()
     d = bond._result("diagnostics")
-    assert d["lastTermRelative"] < 1e-6 and d["orderUsed"] == 4 and d["tailFallbacks"] == 0
+    assert d["lastTermRelative"] < 1e-6 and d["orderUsed"] == 4 and d["numericalNodes"] == 0
 
 
 def test_rough_fixed_order_warns():
