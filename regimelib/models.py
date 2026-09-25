@@ -53,11 +53,11 @@ class SwitchingVasicek(SwitchingModel):
         # the drift forcing (b_i - b_bar) a d_r is constant in r; the diffusion forcing (s2_i - s2_bar) d_rr / 2
         return Lbar, [Adrift, Adiff], [b, s2], grid, None, self.r0
 
-    def bondOnGrid(self, r, t, S):
+    def bondOnGrid(self, grid, t, S):
         """Zero-coupon bond at time t for maturity S on the rate grid, one row per regime: a_j(S - t) exp(-B(S - t) r)."""
         from .engines import _numericalAVector
         from ._engine.models import vasicek_terminal
-        tau = S - t
+        r = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(r)))
         g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0)
@@ -111,10 +111,10 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         Lbar = sp.diags(thbar - r) @ Adrift + 0.5 * self.sigma ** 2 * sp.diags(r) @ D2 - sp.diags(r)
         return Lbar, [Adrift], [th], grid, None, self.r0
 
-    def bondOnGrid(self, r, t, S):
+    def bondOnGrid(self, grid, t, S):
         """Bond at time t for maturity S per regime: a_j(S - t) exp(-B(S - t) r), B the CIR Riccati solution."""
         from .engines import _numericalAVector
-        tau = S - t
+        r = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(r)))
         g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, tau)
@@ -276,11 +276,11 @@ class SwitchingHullWhite(SwitchingModel):
         Lbar = -self.a * sp.diags(x) @ D1 + s2bar * Adiff - sp.diags(x)
         return Lbar, [Adiff], [s2], grid, None, 0.0
 
-    def bondOnGrid(self, x, t, S):
+    def bondOnGrid(self, grid, t, S):
         """Bond at time t for maturity S on the factor grid, per regime: exp(-int_t^S phi) a_j(S - t) exp(-B(S - t) x)."""
         from .engines import _numericalAVector
         from ._engine.models import vasicek_terminal
-        tau = S - t
+        x = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(x)))
         g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0)
@@ -320,6 +320,40 @@ class SwitchingG2(SwitchingModel):
         """exp(-int_{t1}^{t2} phi): the curve factor and the averaged covariance term."""
         _, _, pre = self.bondForcing(t2)
         return pre(t2) / pre(t1)
+
+    def operators(self, instrument, n, width):
+        """Grid in the two zero-mean factors (x, y), r = x + y + phi(t): L_i = -a x d_x - b y d_y + sigma_i^2 d_xx / 2
+        + eta_i^2 d_yy / 2 + rho_i sigma_i eta_i d_xy - (x + y); the phi part of the discounting is deterministic.
+        n is (nx, ny) or one count for both; width the half-widths (Lx, Ly) or one number."""
+        from .firstorder import Grid2D
+        pi = self.chain.stationaryDistribution()
+        sig, eta, rho = (np.asarray(v, float) for v in (self.sigma, self.eta, self.rho))
+        f = [sig ** 2, eta ** 2, rho * sig * eta]; fbar = [float(pi @ v) for v in f]
+        nx, ny = (n, n) if np.isscalar(n) else n
+        if width is None:                                                  # six standard deviations at the last exercise
+            Tend = max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
+            sdx = math.sqrt(max(sig ** 2) * (1 - math.exp(-2 * self.a * Tend)) / (2 * self.a))
+            sdy = math.sqrt(max(eta ** 2) * (1 - math.exp(-2 * self.b * Tend)) / (2 * self.b))
+            Lx, Ly = 6 * sdx, 6 * sdy
+        else:
+            Lx, Ly = (width, width) if np.isscalar(width) else width
+        grid = Grid2D(-Lx, Lx, nx, -Ly, Ly, ny)
+        A = [0.5 * grid.d2x, 0.5 * grid.d2v, grid.d1xv]
+        Lbar = (-self.a * sp.diags(grid.X) @ grid.d1x - self.b * sp.diags(grid.V) @ grid.d1v
+                + fbar[0] * A[0] + fbar[1] * A[1] + fbar[2] * A[2] - sp.diags(grid.X + grid.V))
+        return Lbar, A, f, grid, None, (0.0, 0.0)
+
+    def bondOnGrid(self, grid, t, S):
+        """Bond at time t for maturity S on the factor grid per regime: exp(-int_t^S phi) a_j(S - t) exp(-B_a x - B_b y)."""
+        from .engines import _numericalAVector
+        from .g2options import _g2_forcing
+        tau = S - t
+        if tau <= 0:
+            return np.ones((self.n, grid.n))
+        g, gf = _g2_forcing(self.a, self.b, self.sigma, self.eta, self.rho, 0.0, 0.0)
+        avec = _numericalAVector(self.chain.generator, g, gf, tau).real
+        Ba, Bb = (1 - math.exp(-self.a * tau)) / self.a, (1 - math.exp(-self.b * tau)) / self.b
+        return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Ba * grid.X - Bb * grid.V)[None, :]
 
 
 class SwitchingHestonVolOfVol(SwitchingModel):

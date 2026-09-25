@@ -109,7 +109,7 @@ class SwitchingFDEngine:
     def _rateOption(self, inst):
         m = self.model
         if not hasattr(m, "bondOnGrid"):
-            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite, SwitchingCoxIngersollRoss)")
+            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite, SwitchingCoxIngersollRoss, SwitchingG2)")
         Big, grid, _, r0, nR = self._system(inst, self.width)
         if isinstance(inst, Swaption):
             exercises = inst.exerciseTimes or [inst.maturity]; isCall, K = not inst.isPayer, inst.notional
@@ -119,7 +119,7 @@ class SwitchingFDEngine:
         def exerciseValue(t):
             """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid, expressed in
             the grid's numeraire: the grid discounts with the factor only, the fitted drift's part is deterministic."""
-            bond = sum(c * m.bondOnGrid(grid.x, t, S) for S, c in inst.cashflows if S > t + 1e-12)
+            bond = sum(c * m.bondOnGrid(grid, t, S) for S, c in inst.cashflows if S > t + 1e-12)
             ex = np.maximum(bond - K, 0.0) if isCall else np.maximum(K - bond, 0.0)
             return ex / m.deterministicDiscount(t, T_end)
         steps = self.steps

@@ -119,3 +119,25 @@ def test_cir_grid_european_matches_jamshidian_and_bermudan_matches_tree():
         oe.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=n, steps=st)); vals.append(oe.NPV())
     assert vals[0] == pytest.approx(vals[1], rel=2e-4)
     ob.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=1601, steps=600)); assert ob.NPV() > vals[0] > 0
+
+
+def test_g2_grid_european_matches_quantlib_and_bermudan_matches_fd():
+    ql.Settings.instance().evaluationDate = REF
+    r, a, sigma, b, eta, rho, K = 0.03, 0.5, 0.012, 0.08, 0.009, -0.6, 0.035
+    cal, dc = ql.NullCalendar(), ql.Actual365Fixed()
+    ts = ql.YieldTermStructureHandle(ql.FlatForward(REF, r, dc)); g2 = ql.G2(ts, a, sigma, b, eta, rho)
+    index = ql.IborIndex("idx", ql.Period(1, ql.Years), 0, ql.USDCurrency(), cal, ql.Unadjusted, False, dc, ts)
+    start = REF + ql.Period(1, ql.Years); end = start + ql.Period(5, ql.Years)
+    sched = ql.Schedule(start, end, ql.Period(1, ql.Years), cal, ql.Unadjusted, ql.Unadjusted, ql.DateGeneration.Forward, False)
+    swap = ql.VanillaSwap(ql.VanillaSwap.Payer, 1.0, sched, K, dc, sched, index, 0.0, dc)
+    eu = ql.Swaption(swap, ql.EuropeanExercise(start)); eu.setPricingEngine(ql.G2SwaptionEngine(g2, 8.0, 64))
+    be = ql.Swaption(swap, ql.BermudanExercise(list(sched)[:-1])); be.setPricingEngine(ql.FdG2SwaptionEngine(g2, 200, 200, 100))
+    fixed_times = [dc.yearFraction(REF, d) for d in list(sched)[1:]]; ex_times = [dc.yearFraction(REF, d) for d in list(sched)[:-1]]
+    frozen = rl.SwitchingG2(rl.RegimeChain.twoState(3.0, 5.0), ts, a, sigma, b, eta, rho)
+    oe = rl.Swaption("payer", ex_times[0], fixed_times, K); oe.setPricingEngine(rl.SwitchingFDEngine(frozen, n=(161, 81), steps=300))
+    assert oe.NPV() == pytest.approx(eu.NPV(), rel=2e-3)
+    ob = rl.Swaption("payer", ex_times[0], fixed_times, K, exerciseTimes=ex_times); ob.setPricingEngine(rl.SwitchingFDEngine(frozen, n=(161, 81), steps=300))
+    assert ob.NPV() == pytest.approx(be.NPV(), rel=3e-3)
+    sw = rl.SwitchingG2(rl.RegimeChain.twoState(6.0, 4.0), ts, a, [0.02, 0.006], b, [0.012, 0.004], [-0.7, -0.2])
+    oe.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=(161, 81), steps=300)); e1 = oe.NPV()
+    ob.setPricingEngine(rl.SwitchingFDEngine(sw, regime=1, n=(161, 81), steps=300)); assert ob.NPV() > e1 > 0
