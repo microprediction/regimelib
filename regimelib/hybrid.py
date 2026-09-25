@@ -53,7 +53,7 @@ class SwitchingEquityRates(SwitchingModel):
         factor = pre * pre_e() * self.S0 ** (1j * w) * cmath.exp(-1j * w * self.q * T)
         return g, gfuncs, factor
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """Grid in (log S, r) for a Black-Scholes equity with Vasicek rates (the grid engine; Hull-White's fitted drift
         is time dependent and is not gridded): L = (r - q - s2/2) d_x + s2/2 d_xx + a (b - r) d_r + sr2/2 d_rr
         + rho sigma sigma_r d_xr - r, with the switched forcings sigma^2 on (d_xx - d_x)/2, b on a d_r, sigma_r^2 on
@@ -72,7 +72,7 @@ class SwitchingEquityRates(SwitchingModel):
         else:
             Lx, Lr = (width, width) if np.isscalar(width) else width
         x0 = math.log(E.S0)
-        grid = Grid2D(x0 - Lx, x0 + Lx, nx, R.r0 - Lr, R.r0 + Lr, nr)
+        grid = Grid2D(x0 - Lx, x0 + Lx, nx, R.r0 - Lr, R.r0 + Lr, nr, centers=(math.log(instrument.strike), R.r0), stretch=stretch)
         Rd = sp.diags(grid.V)
         A = [0.5 * (grid.d2x - grid.d1x), R.a * grid.d1v, 0.5 * grid.d2v, grid.d1xv]
         Lbar = (sp.diags(grid.V - E.q) @ grid.d1x + fbar[0] * A[0] + sp.diags(fbar[1] - grid.V) @ A[1]

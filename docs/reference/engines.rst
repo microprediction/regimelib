@@ -56,13 +56,16 @@ Black–Scholes options). ``standardError`` is set after ``NPV()``.
 Finite differences
 ------------------
 
-.. function:: rl.SwitchingFDEngine(model, regime=0, n=1001, steps=400, width=None)
+.. function:: rl.SwitchingFDEngine(model, regime=0, n=1001, steps=400, width=None, stretch=None)
 
 Time-stepping on the coupled system ``u_i' = L_i u_i + sum_j Q_ij u_j``, Rannacher's implicit half-steps followed by
 Crank–Nicolson. American exercise projects onto the payoff after every step; a knock-out barrier truncates the grid
 at the barrier node; Bermudan swaptions and coupon-bond options compare with the exercise value, per regime, at
 each exercise date on a short-rate grid (Vasicek, CIR, Hull–White in its zero-mean factor, G2 on a two-factor grid
-with ``n = (nx, ny)``); American options under the hybrid model on a ``(log S, r)`` grid. ``delta``, ``gamma`` and ``theta`` come from the grid for equity options.
+with ``n = (nx, ny)``); American options under the hybrid model on a ``(log S, r)`` grid. ``stretch`` concentrates the
+nodes of a two-dimensional grid around the strike and the starting factor by a sinh map (the width of the dense
+region as a fraction of the interval; 0.15 halves the Heston vol-of-vol grid error at a given node count); uniform
+when ``None``, which suits swaptions, whose exercise region is broad. ``delta``, ``gamma`` and ``theta`` come from the grid for equity options.
 
 .. code-block:: python
 
@@ -73,7 +76,7 @@ with ``n = (nx, ny)``); American options under the hybrid model on a ``(log S, r
 The first-order tier
 --------------------
 
-.. function:: rl.FirstOrderFDEngine(model, regime=0, n=801, width=None, warnAbove=0.03)
+.. function:: rl.FirstOrderFDEngine(model, regime=0, n=801, width=None, warnAbove=0.03, stretch=None)
 
 For models whose reduction is not exact (``SwitchingCEVProcess``, ``SwitchingHestonVolOfVol``): the averaged
 operator, the Green–Kubo correction ``sum K_jk A_j A_k`` carried by an augmented linear system, and the memory term

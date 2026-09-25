@@ -15,13 +15,15 @@ from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOptio
 class SwitchingFDEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, n=1001, steps=400, width=None):
-        self.model, self.regime, self.n, self.steps, self.width = model, regime, n, steps, width
+    def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None):
+        """`stretch` concentrates the nodes of a two-dimensional grid around the strike and the starting factor
+        (the width of the dense region as a fraction of the interval, 0.1 to 0.3 is usual); None is uniform."""
+        self.model, self.regime, self.n, self.steps, self.width, self.stretch = model, regime, n, steps, width, stretch
 
     # -- the block operator on a given grid ---------------------------------------------------------------------
     def _system(self, instrument, width):
         m = self.model
-        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, width)
+        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, width, stretch=self.stretch)
         f = np.atleast_2d(np.asarray(f, float)); pi = m.chain.stationaryDistribution(); nR = m.n
         Q = m.chain.generator; I = sp.identity(grid.n, format="csr")
         blocks = [[None] * nR for _ in range(nR)]

@@ -35,7 +35,7 @@ class SwitchingVasicek(SwitchingModel):
         g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0])
         return g, gfuncs, (lambda t: pre(t, [self.r0]))
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """Short-rate grid; L_i = a (b_i - r) d_r + sigma_i^2 / 2 d_rr - r, split as L_bar plus the switched parts
         (b_i - b_bar) a d_r and (sigma_i^2 - s2_bar) d_rr / 2. No terminal payoff: rate instruments build their own."""
         from .firstorder import Grid1D
@@ -96,7 +96,7 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, T)
         return g, gfuncs, (lambda t: pre(t, self.r0))
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """Short-rate grid on [0, r_max]; L_i = k (theta_i - r) d_r + sigma^2 r / 2 d_rr - r, the switched part being
         the drift k (theta_i - theta_bar) d_r. The origin is an outflow boundary when the Feller condition holds."""
         from .firstorder import Grid1D
@@ -261,7 +261,7 @@ class SwitchingHullWhite(SwitchingModel):
         """exp(-int_{t1}^{t2} phi), the discounting carried by the fitted drift rather than by the factor x."""
         return self.discount(t2) / self.discount(t1) * math.exp(-(self._intShift(t2) - self._intShift(t1)))
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """Grid in the zero-mean factor x (r = x + phi(t)); L_i = -a x d_x + sigma_i^2 / 2 d_xx - x, the phi part of the
         discounting being deterministic (deterministicDiscount). Started from x0 = 0."""
         from .firstorder import Grid1D
@@ -321,7 +321,7 @@ class SwitchingG2(SwitchingModel):
         _, _, pre = self.bondForcing(t2)
         return pre(t2) / pre(t1)
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """Grid in the two zero-mean factors (x, y), r = x + y + phi(t): L_i = -a x d_x - b y d_y + sigma_i^2 d_xx / 2
         + eta_i^2 d_yy / 2 + rho_i sigma_i eta_i d_xy - (x + y); the phi part of the discounting is deterministic.
         n is (nx, ny) or one count for both; width the half-widths (Lx, Ly) or one number."""
@@ -337,7 +337,7 @@ class SwitchingG2(SwitchingModel):
             Lx, Ly = 6 * sdx, 6 * sdy
         else:
             Lx, Ly = (width, width) if np.isscalar(width) else width
-        grid = Grid2D(-Lx, Lx, nx, -Ly, Ly, ny)
+        grid = Grid2D(-Lx, Lx, nx, -Ly, Ly, ny, centers=(0.0, 0.0), stretch=stretch)
         A = [0.5 * grid.d2x, 0.5 * grid.d2v, grid.d1xv]
         Lbar = (-self.a * sp.diags(grid.X) @ grid.d1x - self.b * sp.diags(grid.V) @ grid.d1v
                 + fbar[0] * A[0] + fbar[1] * A[1] + fbar[2] * A[2] - sp.diags(grid.X + grid.V))
@@ -370,7 +370,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         """n is (nx, nv) or a single count used for both; width the half-width in log price (and v_max as a multiple
         of max(v0, theta) is fixed at 5). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
         + xi_bar^2 v/2 d_vv + rho xi_bar v d_xv - r; the switched forcings are xi^2 on v d_vv / 2 and xi on rho v d_xv."""
@@ -379,7 +379,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         xi = np.asarray(self.xi, float); xibar, xi2bar = float(pi @ xi), float(pi @ xi ** 2)
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
-        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, 5 * vtop, nv)
+        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, 5 * vtop, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
         A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
@@ -424,7 +424,7 @@ class SwitchingIntensityBasket(SwitchingModel):
 
 
 # ---------------------------------------------------------------- operator form for the first-order tier
-def _bs_operators(self, instrument, n, width):
+def _bs_operators(self, instrument, n, width, stretch=None):
     """Log-price grid; L_bar = (r - q - s2bar/2) d_x + s2bar/2 d_xx - r; the switched sigma^2 multiplies A = (d_xx - d_x)/2."""
     from .firstorder import Grid1D
     T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
@@ -453,7 +453,7 @@ class SwitchingCEVProcess(SwitchingModel):
         self.S0, self.r, self.q, self.beta = float(S0), float(r), float(q), float(beta)
         self.sigma = _per_regime(sigma, self.n)
 
-    def operators(self, instrument, n, width):
+    def operators(self, instrument, n, width, stretch=None):
         from .firstorder import Grid1D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
         s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)

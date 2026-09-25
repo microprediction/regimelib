@@ -101,7 +101,7 @@ constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), whi
 function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: a non-uniform grid for the two-factor engines; parameter greeks for the option formulas.
+Roadmap: parameter greeks for the option formulas; ports to other languages with a parity suite.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
 

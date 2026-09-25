@@ -51,20 +51,35 @@ def green_kubo_derivatives(chain, f, wrt):
 
 
 class Grid1D:
-    def __init__(self, lo, hi, n):
-        self.x = np.linspace(lo, hi, n); self.h = self.x[1] - self.x[0]; self.n = n
+    """n nodes on [lo, hi], uniform unless `center` and `stretch` are given, in which case the nodes concentrate
+    around `center` by the sinh map of Tavella and Randall (`stretch` is the width of the dense region as a
+    fraction of the interval; smaller is denser). Three-point stencils on the non-uniform spacing."""
+    def __init__(self, lo, hi, n, center=None, stretch=None):
+        if center is None or stretch is None:
+            self.x = np.linspace(lo, hi, n)
+        else:
+            c = float(np.clip(center, lo, hi)); d = stretch * (hi - lo)
+            a, b = np.arcsinh((lo - c) / d), np.arcsinh((hi - c) / d)
+            self.x = c + d * np.sinh(np.linspace(a, b, n)); self.x[0], self.x[-1] = lo, hi
+        self.h = float(np.median(np.diff(self.x))); self.n = n; self.uniform = center is None or stretch is None
 
     def d1(self):
-        n, h = self.n, self.h
-        D = sp.diags([-np.ones(n - 1), np.ones(n - 1)], [-1, 1], shape=(n, n), format="lil") / (2 * h)
-        D[0, :3] = [-3, 4, -1]; D[0, :3] = D[0, :3] / (2 * h); D[-1, -3:] = [1, -4, 3]; D[-1, -3:] = D[-1, -3:] / (2 * h)
+        n, x = self.n, self.x; D = sp.lil_matrix((n, n))
+        for i in range(1, n - 1):
+            hm, hp = x[i] - x[i - 1], x[i + 1] - x[i]
+            D[i, i - 1], D[i, i], D[i, i + 1] = -hp / (hm * (hm + hp)), (hp - hm) / (hm * hp), hm / (hp * (hm + hp))
+        h0, h1 = x[1] - x[0], x[2] - x[1]                       # one-sided at the ends
+        D[0, 0], D[0, 1], D[0, 2] = -(2 * h0 + h1) / (h0 * (h0 + h1)), (h0 + h1) / (h0 * h1), -h0 / (h1 * (h0 + h1))
+        h0, h1 = x[-1] - x[-2], x[-2] - x[-3]
+        D[-1, -1], D[-1, -2], D[-1, -3] = (2 * h0 + h1) / (h0 * (h0 + h1)), -(h0 + h1) / (h0 * h1), h0 / (h1 * (h0 + h1))
         return D.tocsr()
 
     def d2(self):
-        n, h = self.n, self.h
-        D = sp.diags([np.ones(n - 1), -2 * np.ones(n), np.ones(n - 1)], [-1, 0, 1], shape=(n, n), format="lil") / (h * h)
-        D[0, :] = 0; D[-1, :] = 0                                # second derivative zero at the ends
-        return D.tocsr()
+        n, x = self.n, self.x; D = sp.lil_matrix((n, n))
+        for i in range(1, n - 1):
+            hm, hp = x[i] - x[i - 1], x[i + 1] - x[i]
+            D[i, i - 1], D[i, i], D[i, i + 1] = 2 / (hm * (hm + hp)), -2 / (hm * hp), 2 / (hp * (hm + hp))
+        return D.tocsr()                                         # second derivative zero at the ends
 
     def interp(self, u, x0):
         return float(np.interp(x0, self.x, u))
@@ -72,8 +87,9 @@ class Grid1D:
 
 class Grid2D:
     """Tensor grid (x, v); node index ix * nv + iv. d1x, d2x, d1v, d2v are the one-dimensional operators lifted."""
-    def __init__(self, xlo, xhi, nx, vlo, vhi, nv):
-        self.gx, self.gv = Grid1D(xlo, xhi, nx), Grid1D(vlo, vhi, nv)
+    def __init__(self, xlo, xhi, nx, vlo, vhi, nv, centers=None, stretch=None):
+        cx, cv = (None, None) if centers is None else centers
+        self.gx, self.gv = Grid1D(xlo, xhi, nx, cx, stretch), Grid1D(vlo, vhi, nv, cv, stretch)
         self.x, self.v, self.n = self.gx.x, self.gv.x, nx * nv
         Ix, Iv = sp.identity(nx, format="csr"), sp.identity(nv, format="csr")
         self.d1x, self.d2x = sp.kron(self.gx.d1(), Iv, format="csr"), sp.kron(self.gx.d2(), Iv, format="csr")
@@ -90,8 +106,8 @@ class Grid2D:
 class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""
-    def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03):
-        self.model, self.regime, self.n, self.width = model, regime, n, width
+    def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03, stretch=None):
+        self.model, self.regime, self.n, self.width, self.stretch = model, regime, n, width, stretch
         self.averaged = self.correction = self.memory = None
         self.warnAbove = warnAbove; self.diagnostics = {}
 
@@ -99,7 +115,7 @@ class FirstOrderFDEngine:
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the first-order finite-difference engine prices vanilla options")
         m, T = self.model, instrument.maturity
-        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width)
+        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         K, M = green_kubo(m.chain, f)
         C = sum(K[j, k] * (As[j] @ As[k]) for j in range(len(As)) for k in range(len(As)))
         Z = sp.csr_matrix((grid.n, grid.n))
@@ -123,12 +139,12 @@ class FirstOrderFDEngine:
 
 class SwitchingFDReferee:
     """The switching model solved without expansion on the same grid: u_i' = L_i u_i + sum_j Q_ij u_j."""
-    def __init__(self, model, regime=0, n=801, width=None):
-        self.model, self.regime, self.n, self.width = model, regime, n, width
+    def __init__(self, model, regime=0, n=801, width=None, stretch=None):
+        self.model, self.regime, self.n, self.width, self.stretch = model, regime, n, width, stretch
 
     def calculate(self, instrument):
         m, T = self.model, instrument.maturity
-        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width)
+        Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         f = np.atleast_2d(np.asarray(f, float)); pi = m.chain.stationaryDistribution(); nR = m.n
         blocks = [[None] * nR for _ in range(nR)]
         Q = m.chain.generator; I = sp.identity(grid.n, format="csr")
