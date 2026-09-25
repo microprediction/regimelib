@@ -1,10 +1,27 @@
 [project]
 name = "regimelib"
-version = "0.0.1"
+version = "0.1.0"
 description = "QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion"
 readme = "README.md"
+license = {text = "MIT"}
+authors = [{name = "Peter Cotton", email = "peter.cotton@microprediction.com"}]
 requires-python = ">=3.9"
 dependencies = ["numpy", "scipy", "mpmath", "sympy"]
+keywords = ["regime switching", "QuantLib", "option pricing", "interest rates", "hidden Markov", "homogenization"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Financial and Insurance Industry",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Topic :: Office/Business :: Financial",
+    "Topic :: Scientific/Engineering :: Mathematics",
+]
+[project.urls]
+Homepage = "https://regimeswitching.org"
+Documentation = "https://regimeswitching.org/python/"
+Source = "https://github.com/microprediction/regimelib"
+Issues = "https://github.com/microprediction/regimelib/issues"
 [project.optional-dependencies]
 test = ["pytest", "QuantLib"]
 [build-system]
