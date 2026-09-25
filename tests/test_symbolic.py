@@ -93,3 +93,19 @@ def test_cir_first_order_formula():
         bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=regime))
         assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)
         assert f.evaluate(f.greek("r0"), **vals) == pytest.approx(-f.evaluate(f.B * f.price, **vals), rel=1e-12)   # delta = -B P
+
+
+@pytest.mark.slow
+def test_vasicek_jumps_first_order_formula():
+    from regimelib.symbolic import VasicekJumpsBondFirstOrder
+    chain = rl.RegimeChain([[-5, 3, 2], [4, -9, 5], [1, 6, -7]])
+    kappa_, thetas, sigmas, lams, m_, r0_, T_ = 0.5, [0.06, 0.03, 0.01], [0.015, 0.01, 0.006], [2.0, 0.5, 0.1], 0.01, 0.03, 3.0
+    f = VasicekJumpsBondFirstOrder()
+    for regime in (0, 1, 2):
+        vals = dict(r0=r0_, kappa=kappa_, m=m_, T=T_, **f.coefficients(chain, kappa_, thetas, sigmas, lams, regime))
+        model = rl.SwitchingVasicekJumps(chain, r0_, kappa_, thetas, sigmas, lams, m_)
+        bond = rl.ZeroCouponBond(T_); bond.setPricingEngine(rl.FastSwitchingEngine(model, order=1, regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-9)
+        bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)
+        assert f.evaluate(f.greek("r0"), **vals) == pytest.approx(-f.evaluate(f.B * f.price, **vals), rel=1e-12)

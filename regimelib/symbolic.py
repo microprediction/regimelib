@@ -214,3 +214,66 @@ class CIRBondFirstOrder:
         if key not in self._fn:
             self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
         return float(self._fn[key](*[values[n] for n in self.symbols]))
+
+
+# ---------------------------------------------------------------- Vasicek with jumps at a switching intensity, first order
+class VasicekJumpsBondFirstOrder:
+    """Vasicek with exponential jumps of mean m at intensity l_y (SwitchingVasicekJumps) under any finite chain,
+    first order in the holding time, as a formula. The forcing g_i = c_i B + d_i B^2 + l_i J with c_i = -kappa theta_i,
+    d_i = sigma_i^2 / 2 and J(t) = 1 / (1 + m B(t)) - 1, so three Green-Kubo entries per pair (symmetric parts) and three
+    memory coefficients enter:
+
+        log P_i = -B r0 + cbar I1 + dbar I2 + lbar IJ
+                  + K_cc I2 + 2 K_cd I3 + K_dd I4 + 2 K_cl IJB + 2 K_dl IJB2 + K_ll IJJ
+                  + log(1 + m_c B + m_d B^2 + m_l J),
+
+    every integral over [0, T] closed by the substitution u = e^{-kappa t} (rational integrands). Building the
+    formula takes about half a minute of sympy."""
+    m_, cbar, dbar, lbar = sp.symbols("m cbar dbar lbar", real=True)
+    Kcl, Kdl, Kll, ml = sp.symbols("K_cl K_dl K_ll m_l", real=True)
+    symbols = dict(r0=r0, kappa=kappa, m=m_, T=T, cbar=cbar, dbar=dbar, lbar=lbar, Kcc=Kcc, Kcd=Kcd, Kdd=Kdd,
+                   Kcl=Kcl, Kdl=Kdl, Kll=Kll, mc=mc, md=md, ml=ml)
+
+    def __init__(self):
+        u = sp.symbols("u", positive=True)                                    # u = e^{-kappa t}, dt = -du / (kappa u)
+        Bu = (1 - u) / kappa; Ju = 1 / (1 + self.m_ * Bu) - 1
+        def I(expr):
+            return sp.integrate(sp.apart(sp.together(expr / (kappa * u)), u), (u, sp.exp(-kappa * T), 1))
+        I1, I2, I3, I4 = (I(Bu ** n) for n in (1, 2, 3, 4))
+        IJ, IJB, IJB2, IJJ = I(Ju), I(Ju * Bu), I(Ju * Bu ** 2), I(Ju * Ju)
+        BT = Bu.subs(u, sp.exp(-kappa * T)); JT = Ju.subs(u, sp.exp(-kappa * T))
+        self.B, self.J = BT, JT
+        self.terms = {
+            "state": -BT * r0,
+            "averaged": self.cbar * I1 + self.dbar * I2 + self.lbar * IJ,
+            "green_kubo": Kcc * I2 + 2 * Kcd * I3 + Kdd * I4 + 2 * self.Kcl * IJB + 2 * self.Kdl * IJB2 + self.Kll * IJJ,
+            "memory": sp.log(1 + mc * BT + md * BT ** 2 + self.ml * JT),
+        }
+        self.logPrice = sum(self.terms.values()); self.price = sp.exp(self.logPrice)
+        self._fn = {}
+
+    @staticmethod
+    def coefficients(chain, kappa_, thetas, sigmas, intensities, regime=0):
+        import numpy as np
+        from .firstorder import green_kubo
+        c = -kappa_ * np.asarray(thetas, float); d = 0.5 * np.asarray(sigmas, float) ** 2; l = np.asarray(intensities, float)
+        K, M = green_kubo(chain, [c, d, l]); pi = chain.stationaryDistribution(); sym = lambda i, j: float(0.5 * (K[i, j] + K[j, i]))
+        return dict(cbar=float(pi @ c), dbar=float(pi @ d), lbar=float(pi @ l), Kcc=float(K[0, 0]), Kcd=sym(0, 1), Kdd=float(K[1, 1]),
+                    Kcl=sym(0, 2), Kdl=sym(1, 2), Kll=float(K[2, 2]), mc=float(-M[0, regime]), md=float(-M[1, regime]), ml=float(-M[2, regime]))
+
+    def greek(self, *wrt):
+        e = self.price
+        for name in wrt:
+            e = sp.diff(e, self.symbols[name])
+        return e
+
+    def evaluate(self, expr, **values):
+        """The antiderivatives carry logarithms whose arguments can be negative between the limits; their imaginary
+        parts cancel, so the expression is evaluated in complex arithmetic and the real part returned."""
+        key = sp.srepr(expr)
+        if key not in self._fn:
+            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "mpmath")
+        import mpmath
+        v = self._fn[key](*[mpmath.mpc(values[n]) for n in self.symbols])
+        assert abs(mpmath.im(v)) < 1e-9 * max(1.0, abs(mpmath.re(v))), "imaginary parts did not cancel"
+        return float(mpmath.re(v))
