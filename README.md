@@ -44,6 +44,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 | `BarrierOption` + `AnalyticBarrierEngine` | `BarrierOption(type, barrier, rebate, payoff, exercise)` | `SwitchingFDEngine`: grid truncated at the barrier, knock-in = vanilla − knock-out |
 | `Swaption` + `JamshidianSwaptionEngine` | `Swaption(kind, expiry, fixedTimes, fixedRate, notional)`, `CouponBondOption(kind, K, T, cashflows)` | Jamshidian's decomposition conditioned on the regime at expiry |
 | `Cap`/`Floor` + `AnalyticCapFloorEngine` | `CapFloor(kind, times, strike, notional)` | caplet = (1 + τK) × put on the zero-coupon bond |
+| `HestonModelHelper`, `model.calibrate(helpers, ...)` | `VolatilityHelper(T, K, vol)`, `calibrate(model, helpers, ["sigma", "chain"])` | least squares on relative price (or implied vol) errors; terminal vectors shared across strikes |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 

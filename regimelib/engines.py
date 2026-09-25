@@ -21,11 +21,54 @@ class ExpansionWarning(UserWarning):
     """The fast-switching expansion may not have converged for this instrument and chain."""
 
 
+def _constantValue(gi):
+    """The value of a forcing term that is constant in time (an ExpSum with only the zero rate, or a Chebyshev series
+    of degree zero), else None."""
+    if hasattr(gi, "t"):
+        if all(a == 0.0 for a in gi.t):
+            return complex(gi.t.get(0.0, 0.0))
+        return None
+    if hasattr(gi, "s") and len(gi.s.coef) == 1:
+        return complex(gi.s.coef[0])
+    return None
+
+
 class SwitchingEngine:
     supportsResults = True
 
     def __init__(self, model, regime=0, nodes=96):
         self.model, self.regime, self.nodes = model, regime, nodes
+        self._memo = {}                                       # (fingerprint, T, u) -> terminal data, shared across strikes
+
+    def _fingerprint(self):
+        """The model's numerical parameters, so a memoised terminal vector is never reused after they change."""
+        items = []
+        for k, v in sorted(vars(self.model).items()):
+            if hasattr(v, "generator"):
+                items.append((k, np.asarray(v.generator, float).tobytes()))
+            elif isinstance(v, np.ndarray):
+                items.append((k, v.tobytes()))
+            elif isinstance(v, (int, float, complex)):
+                items.append((k, v))
+            elif isinstance(v, (list, tuple)):
+                items.append((k, tuple(v)))
+            else:
+                items.append((k, id(v)))
+        return hash(tuple(items))
+
+    def _terminal(self, T, u, stoch):
+        """Memoised a(T), its derivative, the prefactor and (for stochastic volatility) the Riccati D, D' at z = u - i/2."""
+        key = (self._fingerprint(), T, u)
+        hit = self._memo.get(key)
+        if hit is None:
+            m = self.model; z = u - 0.5j
+            g, gfuncs, pre = m.returnForcing(z, T)
+            avec, dvec = self._aVector(g, gfuncs, T)
+            hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None)
+            if len(self._memo) > 20000:
+                self._memo.clear()
+            self._memo[key] = hit
+        return hit
 
     # a(T) for the reduced system; subclasses choose the method
     def _a(self, g, gfuncs, T, a0=None):
@@ -132,20 +175,18 @@ class SwitchingEngine:
         I0 = I1 = I2 = Iv = It = 0.0
         stoch = hasattr(m, "v0")
         for u, w in zip(us, ws):
-            z = u - 0.5j
-            g, gfuncs, pre = m.returnForcing(z, T)
-            avec, dvec = self._aVector(g, gfuncs, T)
-            a = avec[self.regime]; phi = pre() * a
+            avec, dvec, prev, ricc = self._terminal(T, u, stoch)
+            a = avec[self.regime]; phi = prev * a
             e = cmath.exp(1j * u * k) * phi
             I0 += w * e.real / (u * u + 0.25)
             I1 += w * ((0.5 + 1j * u) * e).real / (u * u + 0.25)
             I2 += w * e.real
             if stoch:
-                D, dD = self._riccatiD(m, z, T)
+                D, dD = ricc
                 Iv += w * (e * D).real / (u * u + 0.25)
-                dphi = pre() * (dD * m.v0 * a + dvec[self.regime])
+                dphi = prev * (dD * m.v0 * a + dvec[self.regime])
             else:
-                dphi = pre() * dvec[self.regime]
+                dphi = prev * dvec[self.regime]
             It += w * (cmath.exp(1j * u * k) * ((0.5 + 1j * u) * mu * phi + dphi)).real / (u * u + 0.25)
         disc = math.exp(-m.r * T); root = math.sqrt(F * K)
         call = disc * (F - root / math.pi * I0)
@@ -216,7 +257,10 @@ class SwitchingEngine:
         return U
 
     def _nodeCount(self, U, k):
-        return int(min(4000, max(self.nodes, 2 * U * (1 + abs(k)))))
+        """Nodes grow with the oscillation e^{iuk}; the factor is rounded up to a power of two so that strikes of
+        similar moneyness share one node set and the memoised terminal vectors."""
+        factor = 2 ** math.ceil(math.log2(1 + abs(k))) if k else 1
+        return int(min(4000, max(self.nodes, 2 * U * factor)))
 
 class FastSwitchingEngine(SwitchingEngine):
     """order: an integer, or None to add terms until successive orders agree to `tol` (relative) or the next term
@@ -318,6 +362,14 @@ class NumericalSwitchingEngine(SwitchingEngine):
         return numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol, a0=a0)[self.regime]
 
     def _aVector(self, g, gfuncs, T, a0=None):
-        avec = np.asarray(numerical_a_callable(T, self.model.chain.generator, gfuncs, rtol=self.rtol, a0=a0), complex)
+        Q = self.model.chain.generator
+        const = [_constantValue(gi) for gi in g]
+        if all(c is not None for c in const):                  # constant forcing: a(T) = exp((Q + diag g) T) a0 exactly
+            from scipy.linalg import expm
+            gT = np.array(const, complex)
+            a0 = np.ones(len(g), complex) if a0 is None else np.asarray(a0, complex)
+            avec = expm((Q + np.diag(gT)) * T) @ a0
+            return avec, Q @ avec + gT * avec
+        avec = np.asarray(numerical_a_callable(T, Q, gfuncs, rtol=self.rtol, a0=a0), complex)
         gT = np.array([f(T) for f in gfuncs], complex)
-        return avec, self.model.chain.generator @ avec + gT * avec
+        return avec, Q @ avec + gT * avec

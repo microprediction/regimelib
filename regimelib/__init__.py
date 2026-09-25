@@ -7,8 +7,9 @@ from .engines import FastSwitchingEngine, NumericalSwitchingEngine, ExpansionWar
 from .montecarlo import MonteCarloSwitchingEngine
 from .firstorder import FirstOrderFDEngine, SwitchingFDReferee
 from .fd import SwitchingFDEngine
+from .calibration import VolatilityHelper, calibrate
 from . import symbolic
 __all__ = ["RegimeChain", "SwitchingVasicek", "SwitchingCoxIngersollRoss", "SwitchingBlackScholesProcess",
            "SwitchingHestonModel", "SwitchingMerton76Process", "SwitchingBatesModel", "SwitchingVarianceGammaProcess", "SwitchingHullWhite", "SwitchingG2", "SwitchingCEVProcess", "ZeroCouponBond", "VanillaOption", "ZeroCouponBondOption", "CouponBond", "CouponBondOption", "Swaption", "CapFloor", "BarrierOption",
-           "FastSwitchingEngine", "NumericalSwitchingEngine", "ExpansionWarning", "MonteCarloSwitchingEngine", "FirstOrderFDEngine", "SwitchingFDReferee", "SwitchingFDEngine"]
+           "FastSwitchingEngine", "NumericalSwitchingEngine", "ExpansionWarning", "MonteCarloSwitchingEngine", "FirstOrderFDEngine", "SwitchingFDReferee", "SwitchingFDEngine", "VolatilityHelper", "calibrate"]
 __version__ = "0.0.1"
