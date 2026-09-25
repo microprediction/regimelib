@@ -1,0 +1,407 @@
+\documentclass[11pt]{article}
+\usepackage[margin=1.1in]{geometry}
+\usepackage{amsmath,amssymb,amsthm,booktabs,graphicx,xcolor,hyperref,url,microtype}
+\usepackage[numbers,sort&compress]{natbib}
+\hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
+\makeatletter
+\renewcommand\paragraph{\@startsection{paragraph}{4}{\z@}%
+  {3.25ex \@plus1ex \@minus.2ex}{-1em}%
+  {\normalfont\normalsize\itshape}}
+\makeatother
+\newtheorem{theorem}{Theorem}
+\newtheorem{proposition}[theorem]{Proposition}
+\newtheorem{lemma}[theorem]{Lemma}
+\newtheorem{corollary}[theorem]{Corollary}
+\theoremstyle{remark}
+\newtheorem{remark}[theorem]{Remark}
+\newcommand{\R}{\mathbb{R}}
+\newcommand{\E}{\mathbb{E}}
+\newcommand{\dd}{\,\mathrm{d}}
+\newcommand{\eps}{\varepsilon}
+\newcommand{\diag}{\operatorname{diag}}
+\newcommand{\rl}{\textsf{regimelib}}
+\newcommand{\ql}{\textsf{QuantLib}}
+
+\title{Pricing under a Hidden Markov Regime by the Fast-Switching Expansion:\\
+The Reduced System, Its Asymptotics, and a Library in QuantLib's Mold}
+\author{Peter Cotton\thanks{\texttt{peter.cotton@microprediction.com}. Code: \url{https://github.com/microprediction/regimelib}; documentation: \url{https://regimeswitching.org}.}}
+\date{September 2026}
+
+\begin{document}
+\maketitle
+
+\begin{abstract}
+A regime-switching model lets any parameter of a standard model take a different value in each state of a
+hidden Markov chain. For the affine and exponential-L\'evy models in common use the pricing problem reduces to
+one linear system, $a' = (Q + \diag g(t))\,a$, with the chain's generator $Q$ and a model-specific forcing $g$ as
+its only ingredients. We expand its solution in the mean holding time of the chain to any order, with an initial
+layer for the starting regime, and identify the first correction as a Green--Kubo matrix from the group inverse
+of $Q$. The same system prices bonds, options on bonds and swaps, and equity options under stochastic rates once
+the Gil--Pelaez integrals are conditioned on the regime at expiry. The methods are implemented in \rl{}, a Python
+library in \ql{}'s mold whose every model reduces to \ql{}'s when the regimes coincide, and whose certificates
+check that limit against \ql{} and the switching case against an independent referee.
+\end{abstract}
+
+\section{Introduction}
+
+Hamilton's regime-switching model \citep{hamilton1989} put a hidden finite-state Markov chain behind the
+parameters of a time series, and the same device entered derivative pricing soon after: jumps in volatility driven
+by a chain \citep{naik1993}, American options with switching \citep{buffington2002}, a Vasicek rate whose mean
+level is Markovian \citep{elliott2002}. The pricing problem under such models is a coupled system, one pricing
+equation per regime, and for the affine and exponential-L\'evy models that practitioners use the state dependence
+factors out, leaving a linear system of ordinary differential equations in which the chain and the model meet only
+through the generator and a forcing term. The asymptotic study of this system when the chain is fast, in the
+mean holding time, was carried out for the Ornstein--Uhlenbeck (Vasicek) bond and the survival probability in the
+author's thesis \citep{cotton2001}; the general theory of two-time-scale Markov chains is in \citet{yin2013}, and
+the parallel expansion for fast stochastic volatility, with a chain among the admissible drivers, in
+\citet{sircar1999}.
+
+The reduced system has one form for every model in \ql{} \citep{quantlib}: a forcing $g_i(t)$ per regime. Its
+solution expands in the mean holding time to any order, with an initial layer, and the terms are the averaged
+model at order zero, a Green--Kubo matrix of the forcing's fluctuations at order one, and a memory of the starting
+regime through the group inverse of the generator. The series is asymptotic. Where it fails, the reduced system
+is solved numerically instead, and the engine reports which.
+
+The instruments a library must price follow from the same system: bonds, European and digital options, options
+on bonds and swaps, caps, Asian, barrier, American and Bermudan instruments, credit default swaps, equity options
+under stochastic rates. Two constructions in that list appear to be new. Gil--Pelaez integrals conditioned on
+the regime at expiry make Jamshidian's decomposition \citep{jamshidian1989} work regime by regime, and a discounted
+characteristic function prices equity options when the rate and the underlying share the chain.
+
+\rl{} is the Python implementation, in \ql{}'s mold: the same class names and parameters with a chain in front.
+Every model reduces to \ql{}'s when the regimes coincide, and a suite of certificates checks that limit against
+\ql{} and the switching case against a numerical, grid or Monte Carlo referee. The tables below are written by a
+script in the repository.
+
+\section{The reduced system}
+\label{sec:reduced}
+
+Let $y_t$ be a continuous-time Markov chain on $\{1,\dots,n\}$ with generator $Q$ (rows sum to zero, off-diagonal
+entries nonnegative), stationary distribution $\pi$, and let $x_t$ be the state of a model whose parameters depend
+on $y_t$. For a price of the form $u_i(t,x) = \E[\,\Phi(x_T)\,e^{-\int_t^T r_s \dd s} \mid x_t = x, y_t = i\,]$ the
+pricing equations are coupled through the generator,
+\begin{equation}
+  \partial_t u_i + L_i u_i + \sum_j Q_{ij}\, u_j = 0, \qquad u_i(T,\cdot) = \Phi,
+  \label{eq:coupled}
+\end{equation}
+with $L_i$ the generator of $x$ in regime $i$ less the discounting. When the model is affine in $x$ and the payoff
+exponential-affine, $u_i(t,x) = \exp(-B(\tau)\cdot x)\,a_i(\tau)$ with $\tau = T - t$, $B$ solving the model's
+Riccati equation (regime-free when only drift levels, volatilities, correlations or jump intensities switch), and
+$a$ solving
+\begin{equation}
+  a'(\tau) = \big(Q + \diag g(\tau)\big)\,a(\tau), \qquad a(0) = a_0,
+  \label{eq:reduced}
+\end{equation}
+where $a_0 = \mathbf{1}$ for a payoff paid in every regime and $a_0 = e_j$ for one paid only if $y_T = j$.
+Everything model-specific is in the forcing $g_i(\tau)$, and Table~\ref{tab:forcing} lists it for the models in
+the library. Characteristic functions are the same statement with a complex payoff exponent: for the martingale
+log return $X_T$ of an equity model, $\E[e^{iuX_T}\mid y_0 = i] = c(u)\,a_i(T)$ with the forcing evaluated at $u$.
+
+\begin{table}[t]
+\centering\footnotesize
+\begin{tabular}{lll}\toprule
+Model & switching parameters & forcing $g_i(\tau)$ \\\midrule
+Vasicek $dr = a(b - r)\dd t + \sigma \dd W$ & $b,\ \sigma$ & $-a b_i B + \tfrac12 \sigma_i^2 B^2$, $B = (1-e^{-a\tau})/a$ \\
+\quad with a terminal exponent $e^{-cx_T}$ & & same with $B_c = c e^{-a\tau} + (1 - e^{-a\tau})/a$ \\
+Vasicek with exponential jumps & $b,\ \sigma,\ \lambda$ & $\ldots + \lambda_i\big((1 + mB)^{-1} - 1\big)$ \\
+CIR $dr = k(\theta - r)\dd t + \sigma\sqrt r \dd W$ & $\theta$ & $-k\theta_i B$, $B$ the CIR Riccati solution \\
+Hull--White $r = x + \varphi(t)$ & $\sigma$ & $\tfrac12\sigma_i^2 B^2$, $\varphi$ fitted with $\bar\sigma^2 = \pi\cdot\sigma^2$ \\
+G2++ $r = x + y + \varphi(t)$ & $\sigma,\ \eta,\ \rho$ & $\tfrac12(\sigma_i^2 B_a^2 + \eta_i^2 B_b^2 + 2\rho_i\sigma_i\eta_i B_a B_b)$ \\
+Black--Scholes, log return & $\sigma$ & $-\tfrac12\sigma_i^2 (u^2 + iu)$ \\
+Heston, long-run variance & $\theta$ & $\kappa\theta_i D(\tau;u)$, $D$ the Heston Riccati solution \\
+Merton, Bates & $\sigma$ or $\theta$, $\lambda$ & $\ldots + \lambda_i(\phi_J(u) - 1 - iu\,\bar\kappa)$ \\
+Variance gamma & $\sigma,\ \nu,\ \theta$ & $-\nu_i^{-1}\log(1 - iu\theta_i\nu_i + \tfrac12\sigma_i^2\nu_i u^2) + iu\,\omega_i$ \\
+Geometric Asian (Black--Scholes) & $\sigma$ & $iu(\mu - \tfrac12\sigma_i^2)\tfrac{\tau}{T} - \tfrac12 u^2\sigma_i^2 \tfrac{\tau^2}{T^2}$ \\
+Intensity basket $\lambda^1 + \cdots + \lambda^K$ & each name's & sum of the names' forcings \\
+Equity with rates (discounted c.f.) & both parts' & $g^{\text{rates}}_i(\tau; c = 1 - iw) + g^{\text{equity}}_i(w)$ \\
+\bottomrule
+\end{tabular}
+\caption{The forcing of the reduced system \eqref{eq:reduced} for the models in \rl{}. $B$, $D$ are the
+regime-free Riccati solutions of the frozen model; the prefactor $\exp(-B\cdot x_0)$ or $\exp(D v_0)$ is common to
+all regimes. The Asian forcing is in time to maturity, where the weight $(1 - t/T)$ of the log price becomes
+$\tau/T$.}
+\label{tab:forcing}
+\end{table}
+
+\begin{proposition}[Exact reductions]
+For every model in Table~\ref{tab:forcing} the coupled system \eqref{eq:coupled} is solved by
+$\exp(-B(\tau)\cdot x)\,a(\tau)$ with $a$ from \eqref{eq:reduced}. The reduction fails when a switched parameter
+multiplies an operator that does not commute with the rest of $L_i$: the CEV diffusion $\sigma_i^2 S^{2\beta}\partial_{SS}$
+against the drift, or the Heston volatility of variance $\xi_i$ against the mean reversion.
+\end{proposition}
+
+The two-state case of the reduction, a pair of linear ODEs, appears in \citet{elliott2002} for the Vasicek bond.
+One form covers the whole catalogue, including the terminal exponents that bond options need and the complex
+forcings of characteristic functions. The models outside the catalogue are exactly those with a non-commuting
+switched operator, and they are priced at first order below.
+
+\section{The fast-switching expansion}
+\label{sec:expansion}
+
+Write $Q = Q_1/\eps$ with $\eps = n/(-\operatorname{tr} Q)$ the mean holding time of the chain and $Q_1$ of unit
+scale, and expand $a = \sum_k \eps^k a^{(k)}$. Substituting into \eqref{eq:reduced} and matching powers gives at
+each order an equation $Q_1 w = f$, which has a solution only when $\pi\cdot f = 0$ (the Fredholm alternative
+for the singular matrix $Q_1$); the solvability conditions determine the projections onto $\mathbf 1$, the
+particular solutions are given by the group inverse $Q_1^{\#}$ \citep{meyer1975}, and the initial condition
+$a(0) = a_0$, which the outer expansion cannot satisfy regime by regime, is met by an initial layer in the fast
+time $\tau/\eps$. The construction is standard singular perturbation \citep{yin2013}. The terms have a form that can
+be stated.
+
+\begin{theorem}[Expansion with initial layer]
+\label{thm:expansion}
+Let $g$ be smooth on $[0,T]$ and $Q$ irreducible. For every $N$ there are functions $a^{(0)},\dots,a^{(N)}$ and
+layer terms $\ell^{(0)},\dots,\ell^{(N)}$, each computable from $Q_1^{\#}$, $\pi$ and $g$ by quadrature, such that
+\[
+  a(\tau) = \sum_{k=0}^{N} \eps^k\big(a^{(k)}(\tau) + \ell^{(k)}(\tau/\eps)\big) + O(\eps^{N+1})
+\]
+uniformly on $[0,T]$, with $\ell^{(k)}$ decaying exponentially in $\tau/\eps$. The leading terms are
+\begin{align}
+  a^{(0)}_i(\tau) &= \exp\Big(\int_0^\tau \bar g\Big), \qquad \bar g = \pi\cdot g, \label{eq:order0}\\
+  a^{(1)}_i(\tau) &= a^{(0)}(\tau)\Big(\int_0^\tau K(s)\dd s \;-\; m_i(\tau)\Big), \label{eq:order1}\\
+  K(s) &= -\,\pi\cdot\big(\tilde g(s)\odot Q_1^{\#}\tilde g(s)\big), \qquad m_i(\tau) = \big(Q_1^{\#}\tilde g(\tau)\big)_i, \notag
+\end{align}
+where $\tilde g = g - \bar g\mathbf 1$ is the centred forcing and $\odot$ the entrywise product; $\ell^{(0)} = 0$ and
+the first layer is $\ell^{(1)}(s) = e^{Q_1 s}\,Q_1^{\#}\tilde g(0)$, which cancels $-m(0)$ at $\tau = 0$ and decays
+because $Q_1^{\#}\tilde g(0)$ has no component along $\mathbf 1$ ($\pi Q_1^{\#} = 0$).
+\end{theorem}
+
+The order-zero term is the averaged model: the forcing replaced by its stationary average, which for Vasicek is
+the bond of the averaged mean level and averaged variance. The first correction has two parts. The integral of
+$K$ is a Green--Kubo term: for a vector forcing $g = \sum_j \phi_j f_j$ with regime-dependent coefficients $f_j$
+it is the quadratic form $\sum_{jk}\phi_j\phi_k K_{jk}$ in the matrix
+\begin{equation}
+  K_{jk} = \int_0^\infty \operatorname{Cov}\big(f_j(y_0), f_k(y_t)\big)\dd t = -\,\pi\cdot\big(\tilde f_j \odot Q_1^{\#}\tilde f_k\big),
+  \label{eq:gk}
+\end{equation}
+the integrated autocovariance of the parameters along the chain, the extra convexity the switching creates. Only
+its symmetric part enters a scalar forcing. The antisymmetric part, nonzero for a non-reversible chain, enters
+when the switched operators do not commute.
+
+The memory term $m_i$ is the group inverse applied to the centred forcing, evaluated in the starting regime. It
+distinguishes the price seen from regime $i$ from the price seen from regime $j$, and it decays with the layer as
+the chain forgets its start. Higher orders follow by the same recursion, and the library computes them to any
+order, with the integrals done exactly when $g$ is an exponential sum and by Chebyshev series otherwise.
+
+The certificate
+\texttt{verify\_theorem.py} in the repository evaluates the residual of the order-one approximation, layer included,
+for a three-regime chain with the Vasicek forcing and with a constant forcing: the supremum over $[0,T]$ divided by
+$\eps^2$ is constant to within a few percent across $\eps = 0.2, 0.1, 0.05, 0.025$, and without the layer the
+residual for the constant forcing is $0.043\,\eps$, so the layer is not optional.
+
+\begin{remark}[The series is asymptotic]
+The expansion parameter is not $\eps$ alone but $\eps\,\|g\|$, and for a characteristic function $g$ grows with the
+Fourier variable, $|g_i(u)| \sim \tfrac12\sigma_i^2 u^2$ for Black--Scholes. At fixed $\eps$ the terms therefore
+stop decreasing beyond some order, and at fixed order they diverge beyond some frequency. The engine
+therefore reports the size of the last term kept and stops at the best truncation when asked. At Fourier nodes
+where the last term is not smaller than the one before it, the reduced system is solved numerically instead of
+expanded, and the price is a hybrid: the expansion where it converges, the numerical solution where it does not.
+The geometric Asian option, whose characteristic function decays slowly in $u$, needs the hybrid at moderate
+holding times; replacing the diverging nodes by the averaged value leaves an error of $10^{-3}$ there.
+\end{remark}
+
+\begin{proposition}[Two regimes, constant forcing]
+For $n = 2$ and constant $g$ the solution of \eqref{eq:reduced} is exact: with $M = Q + \diag g$ and
+eigenvalues $\mu_\pm = \tfrac12(\operatorname{tr}M \pm \sqrt{\operatorname{tr}^2 M - 4\det M})$,
+$a(\tau) = \big[e^{\mu_+\tau}(M - \mu_- I) - e^{\mu_-\tau}(M - \mu_+ I)\big]\mathbf 1/(\mu_+ - \mu_-)$.
+This is the closed-form characteristic function of every two-regime Black--Scholes, Merton and variance-gamma
+model, and the expansion of Theorem~\ref{thm:expansion} is its expansion in $\eps$.
+\end{proposition}
+
+\section{Instruments}
+\label{sec:instruments}
+
+\paragraph{Bonds and European options.} A bond is $\exp(-B(T)\cdot x_0)\,a_i(T)$ with $a_0 = \mathbf 1$; with
+$a_0 = e_j$ it is the price of the face value paid only if $y_T = j$, and the sum over $j$ recovers the bond.
+European options use Lewis's formula \citep{lewis2001} with the reduced characteristic function,
+\begin{equation}
+  C = e^{-rT}\Big[F - \frac{\sqrt{FK}}{\pi}\int_0^\infty \operatorname{Re}\big(e^{iuk}\,\phi(u - \tfrac i2)\big)\frac{\dd u}{u^2 + \tfrac14}\Big],
+  \qquad \phi(z) = c(z)\,a_i(T;z),
+  \label{eq:lewis}
+\end{equation}
+$k = \log(F/K)$, with the frequency cutoff found from the averaged characteristic function, which every model
+exposes in closed form. Differentiating under the integral gives delta, gamma, theta and rho, and for
+stochastic-volatility models the vega in the initial variance; theta uses $\partial_T\phi$, which the reduced
+system supplies as $(Q + \diag g(T))\,a(T)$. Digitals are Gil--Pelaez integrals of the same function.
+
+\paragraph{Options on bonds, swaptions, caps.}
+Under a Gaussian short rate the bond at expiry $T$ for maturity $S$ in regime $j$ is $A_j e^{-b x_T}$ with
+$A_j = a_j(S - T)$ from the reduced system and $b = B(S - T)$, so the option pays $(A_j e^{-bx_T} - K)^+$ on the
+event $\{x_T < x^*_j\}$ with one crossing $x^*_j = \log(A_j/K)/b$ per regime. Each term is a discounted
+probability of the form $\E[e^{-\int_0^T r}\,e^{-c x_T}\,\mathbf 1\{x_T < x^*_j\}\,\mathbf 1\{y_T = j\}]$. Write
+$\Psi_j(c - iu)$ for the reduced system with the terminal exponent $c - iu$ and $a_0 = e_j$; Gil--Pelaez inversion
+gives
+\begin{equation}
+  \E\big[e^{-\int_0^T r} e^{-cx_T}\mathbf 1\{x_T < x^*_j\}\mathbf 1\{y_T = j\}\big]
+  = \tfrac12\Psi_j(c) - \frac1\pi\int_0^\infty \operatorname{Im}\big(e^{-iux^*_j}\,\Psi_j(c - iu)\big)\frac{\dd u}{u}.
+  \label{eq:gilpelaez}
+\end{equation}
+The regime indicator at expiry is carried by the initial vector $e_j$ and costs nothing beyond one solve per
+regime; the integrals are done on Kronrod panels with an error estimate and halved until it is met.
+A coupon bond $\sum_k c_k A_{kj}e^{-b_k x}$ is monotone in $x$ in every regime, so Jamshidian's decomposition
+\citep{jamshidian1989} holds regime by regime: one crossing $x^*_j$ per regime, and the option is a sum of
+zero-coupon bond options with strikes $A_{kj}e^{-b_k x^*_j}$. A receiver swaption is the call on the coupon bond
+at par, a payer swaption the put, a caplet $(1 + \tau K)$ puts on the period-end bond struck at $1/(1 + \tau K)$.
+Under Hull--White the deterministic part of the discounting scales the cash flows; under G2++ the same
+construction applies to the zero-coupon bond with $z = B_a x_T + B_b y_T$ as the single variable and a
+two-factor terminal forcing.
+
+\paragraph{Equity with stochastic rates.}
+For an equity and a short rate driven by one chain with independent Brownian motions, the discounted
+characteristic function $\Psi(w) = \E[e^{-\int_0^T r}\,S_T^{iw}]$ factors, given the regime path, into the rates
+part $\E[e^{(iw - 1)\int r}]$, the Gaussian terminal formula with weight $c = 1 - iw$, and the equity's
+martingale characteristic function, so the reduced system takes the sum of the two forcings
+(Table~\ref{tab:forcing}). Lewis's formula in discounted form,
+$C = S_0e^{-qT} - \frac{\sqrt K}{\pi}\int_0^\infty \operatorname{Re}\big(K^{-iu}\Psi(u - \tfrac i2)\big)\frac{\dd u}{u^2 + 1/4}$,
+prices the option with the discount and the return dependent through the regime. An equity--rate correlation is
+admitted for the Black--Scholes equity, where the exponent stays Gaussian given the path and the cross term
+$-c\,iw\,\rho\,\sigma_S\sigma_r B(\tau)$ joins the forcing. In the frozen limit these agree with \ql{}'s analytic
+Black--Scholes--Hull--White and Heston--Hull--White engines to $10^{-8}$ and $10^{-6}$ relative.
+
+\paragraph{Early exercise, barriers, baskets.}
+American and barrier options, Bermudan swaptions and coupon-bond options are priced on the coupled system
+\eqref{eq:coupled} directly, by Crank--Nicolson after Rannacher's implicit start on a grid in the state with one
+block per regime, projecting onto the payoff at each step or exercise date; the exercise value of a swap at a
+Bermudan date is the coupon bond per regime from the reduced system, on the grid. Knock-outs truncate the grid at
+the barrier; knock-ins are the vanilla less the knock-out. Two-factor models (G2++, a switched vol-of-vol, equity
+with rates) use a tensor grid, uniform or concentrated by the sinh map of \citet{tavella2000}. A basket of
+default intensities on one chain has joint survival equal to the bond of the summed forcing, so a first-to-default
+swap prices as a single-name swap on the basket, and the default correlation the common regime induces is read
+off the joint and marginal survivals.
+
+\section{Models outside the exact reduction}
+\label{sec:firstorder}
+
+When a switched parameter multiplies an operator $A_j$ that does not commute with the averaged generator
+$\bar L$, the pricing equation is $\partial_t u_i + (\bar L + \sum_j \tilde f_j(i) A_j)u_i + \sum_k Q_{ik}u_k = 0$ and
+the expansion above still applies to the operator-valued system, with the first
+correction now
+\begin{equation}
+  u \approx e^{T\bar L}u_0 + \int_0^T e^{(T-s)\bar L}\Big(\sum_{jk} K_{jk}A_jA_k\Big)e^{s\bar L}u_0\dd s - \sum_j m_j(i)\,A_j\,e^{T\bar L}u_0,
+  \label{eq:firstorder}
+\end{equation}
+the Green--Kubo matrix \eqref{eq:gk} applied through Duhamel's formula, and the memory term acting on the averaged
+solution. The antisymmetric part of $K$ now contributes through the commutators $[A_j, A_k]$, which is how a
+non-reversible chain leaves a trace that no reversible chain can. The library evaluates \eqref{eq:firstorder} on
+a grid by an augmented linear system exponentiated once, reports the relative size of the correction, and
+estimates the neglected second-order term as its square; on the CEV model with a switched volatility the
+estimate tracks the actual error against the coupled system to within a factor of two across chain speeds, and
+on Heston with a switched volatility of variance the first-order price is within $10^{-4}$--$7\times10^{-4}$ of the
+coupled two-dimensional PDE while the correction itself is 0.3--3\% of the price.
+
+\section{Parameter sensitivities}
+\label{sec:greeks}
+
+Because the chain enters the first-order price only through $\pi$, $K$ and $m$, sensitivities to the model's
+parameters are the chain rule through those numbers, and their derivatives are exact.
+
+\begin{proposition}
+Let $dQ$ be a perturbation of the generator with zero row sums. Then
+\[
+  d\pi = -\pi\, dQ\, Q^{\#}, \qquad
+  dQ^{\#} = -Q^{\#}dQ\,Q^{\#} + \mathbf 1\pi\, dQ\,(Q^{\#})^2 + (Q^{\#})^2 dQ\,\mathbf 1\pi,
+\]
+and $K$ and $m$ vary accordingly: $dK_{jk} = -\big[d\pi\cdot(\tilde f_j\odot Q^{\#}\tilde f_k) + \pi\cdot(d\tilde f_j\odot Q^{\#}\tilde f_k) + \pi\cdot(\tilde f_j\odot dQ^{\#}\tilde f_k + \tilde f_j\odot Q^{\#}d\tilde f_k)\big]$ with $d\tilde f_j = -(f_j\cdot d\pi)\mathbf 1$.
+For a perturbation of a per-regime coefficient $f_j(i)$, $K$ is bilinear and $m$ linear in the forcing, so the
+derivatives are $K$ and $m$ evaluated on unit vectors.
+\end{proposition}
+
+With the first-order bond as a symbolic expression in $\pi\cdot\theta$, $\pi\cdot\sigma^2$, $K$ and $m$,
+$\partial P/\partial\theta_i$, $\partial P/\partial\sigma_i$ and $\partial P/\partial Q_{ab}$
+are formulas rather than bumps; Table~\ref{tab:greeks} checks them against finite differences of the engine at
+the same order.
+
+\section{Numerical certificates}
+\label{sec:numerics}
+
+Table~\ref{tab:frozen} is the frozen limit: two regimes with identical parameters, the chain still switching,
+priced by \rl{} and by \ql{}'s engine for the same instrument. The characteristic-function engines agree with
+\ql{} to quadrature accuracy; the grid engines carry their discretisation error; the credit default swap
+differs by $9\times10^{-5}$, which is the rounding of \ql{}'s schedule to whole days.
+
+Table~\ref{tab:orders} is the expansion with switching on: a payer swaption under a two-regime Vasicek model
+(mean levels 6\% and 2\%, volatilities 1.5\% and 0.8\%) at each order against the numerical solution of the
+reduced system, for four holding times. The error falls with the order until the asymptotic nature of the series
+shows, later for faster chains. The order at which it stops improving is the one the adaptive engine selects.
+
+Table~\ref{tab:timings} gives timings on a laptop. For a bond, one evaluation of the series, the expansion is
+the fastest route. For a Fourier integral the numerical engine solves the reduced system for every node in a
+single batched call, and the series evaluated node by node at order four costs more; the expansion supplies the
+formula, the diagnostics and the greeks under the integral, not speed. The Monte Carlo referee is pure Python
+and priced per path, and is a referee rather than an engine.
+
+Table~\ref{tab:greeks} gives the parameter sensitivities. All four tables are written by
+\texttt{papers/regimelib/verify\_tables.py} in the repository.
+
+\begin{table}[t]\centering\footnotesize
+\resizebox{\textwidth}{!}{\input{tables_frozen}}
+\caption{Frozen limit: two identical regimes on a chain with rates 3 and 5 per year, against \ql{}. Grid engines
+(American, Bermudan, barrier) carry the grid's discretisation error; the characteristic-function engines agree to
+quadrature accuracy.}
+\label{tab:frozen}
+\end{table}
+
+\begin{table}[t]\centering\small
+\input{tables_orders}
+\caption{Relative error of the expansion at each order against the numerical solution of the reduced system, for
+a $2\times5$ payer swaption under a two-regime Vasicek model, by mean holding time $\eps$ of a symmetric two-state
+chain.}
+\label{tab:orders}
+\end{table}
+
+\begin{table}[t]\centering\small
+\input{tables_timings}
+\caption{Wall-clock time per price with switching on (two regimes, rates 12 and 8), Python on a laptop.}
+\label{tab:timings}
+\end{table}
+
+\begin{table}[t]\centering\small
+\input{tables_greeks}
+\caption{Parameter sensitivities of the first-order Vasicek bond under a three-regime chain, from the derivative of the group inverse
+and from central differences of the engine at order one.}
+\label{tab:greeks}
+\end{table}
+
+\section{The library}
+\label{sec:software}
+
+\rl{} is released under the MIT licence at \url{https://github.com/microprediction/regimelib}, on PyPI as
+\texttt{regimelib}, with documentation in \ql{}-Python's layout at \url{https://regimeswitching.org/python/}. Its
+design follows three rules.
+
+\emph{QuantLib's mold.} Each class mirrors a \ql{} class and takes the same parameters with a \texttt{RegimeChain}
+in front; a parameter that switches is a list with one value per regime. Instruments accept \ql{}'s payoff,
+exercise and date objects; \texttt{setPricingEngine} and \texttt{NPV()} are the interface, and the greeks are
+methods on the instrument, computed by differentiating the pricing formula and raising, as \ql{} does, when the
+engine does not provide them.
+
+\emph{Exact reduction or first-order tier.} A model in the all-orders tier is a statement of its forcing; the
+engines never see it otherwise. A model whose reduction is not exact goes to the first-order tier with its
+diagnostics.
+
+\emph{A referee for every number.} Every certificate checks the frozen limit against \ql{} and the switching case
+against a referee that does not share the method: the numerical solution of \eqref{eq:reduced} for the
+expansion, the coupled PDE on a grid for the first-order tier, Monte Carlo with exact regime paths for the grids.
+The frozen limit alone is not enough, and two blind spots fix the design. With all regimes equal, a forcing
+integrates to the same value in calendar time and in time to maturity, so the frozen limit cannot detect the
+direction of time in a time-dependent forcing; with switching on, the Asian option moves by 7\% between the two.
+And a reversible chain has a symmetric Green--Kubo matrix, so only a non-reversible test chain separates the
+symmetric part of $K$ from the whole in a cross term, a $10^{-4}$ effect in the first-order coupon-bond formula.
+The certificates therefore run with switching on and on non-reversible chains.
+
+Closed forms are in \texttt{regimelib.symbolic}: the two-state Vasicek bond to second order, the first-order
+bond under any chain for Vasicek, CIR (integrals closed by the Riccati identity $\int B^2 = \frac2{\sigma^2}(T - kI_1 - B(T))$)
+and Vasicek with jumps, the exact two-state constant-forcing solution, and the parameter greeks above, each
+checked against the engine at the same order to round-off.
+
+\section{Conclusion}
+
+Theorem~\ref{thm:expansion} is stated for a smooth forcing and an irreducible chain, and its proof is the
+singular-perturbation argument of \citet{yin2013}; the certificate checks the order-one case
+numerically and not the general one. The first-order tier has no second-order term and no certificate beyond the
+error estimate against the coupled PDE. We leave to future work the second order of that tier, the equity--rate
+correlation for a Heston equity, and ports of the reference implementation to other languages under the parity
+contract of \texttt{regimeswitching.org}.
+
+\bibliographystyle{plainnat}
+\bibliography{regimelib}
+\end{document}
