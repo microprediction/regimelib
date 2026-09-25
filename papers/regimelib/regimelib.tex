@@ -44,16 +44,16 @@ independent referee with switching on, and the implementation is public.
 \section{Introduction}
 
 Hamilton's regime-switching model \citep{hamilton1989} put a hidden finite-state Markov chain behind the
-parameters of a time series, and the same device entered derivative pricing soon after: jumps in volatility driven
-by a chain \citep{naik1993}, American options with switching \citep{buffington2002}, a Vasicek rate whose mean
-level is Markovian \citep{elliott2002}. The pricing problem under such models is a coupled system, one pricing
-equation per regime, and for the affine and exponential-L\'evy models that practitioners use the state dependence
-factors out, leaving a linear system of ordinary differential equations in which the chain and the model meet only
-through the generator and a forcing term. The asymptotic study of this system when the chain is fast, in the
-mean holding time, was carried out for the Ornstein--Uhlenbeck (Vasicek) bond and the survival probability in the
-author's thesis \citep{cotton2001}; the general theory of two-time-scale Markov chains is in \citet{yin2013}, and
-the parallel expansion for fast stochastic volatility, with a chain among the admissible drivers, in
-\citet{sircar1999}.
+parameters of a time series, and \citet{naik1993} priced options with the volatility driven by such a chain. The
+pricing problem under a regime-switching model is a coupled system, one equation per regime, and for the affine
+and exponential-L\'evy models in use the state dependence factors out, leaving a linear system of ordinary
+differential equations in which the chain and the model meet only through the generator and a forcing term. The
+reduction, and the asymptotic expansion of its solution when the chain is fast in the mean holding time, were
+carried out for the Ornstein--Uhlenbeck bond and the survival probability in the author's thesis
+\citep{cotton2001}. The two-state reduction for the Vasicek bond appears again in \citet{elliott2002}, and
+American options with switching in \citet{buffington2002}; the general theory of two-time-scale Markov chains is
+\citet{yin2013}, and the parallel expansion for fast stochastic volatility, with a chain among the admissible
+drivers, is \citet{sircar1999}.
 
 The reduced system has one form for every model in \ql{} \citep{quantlib}: a forcing $g_i(t)$ per regime. Its
 solution expands in the mean holding time to any order, with an initial layer, and the terms are the averaged
@@ -129,7 +129,7 @@ multiplies an operator that does not commute with the rest of $L_i$: the CEV dif
 against the drift, or the Heston volatility of variance $\xi_i$ against the mean reversion.
 \end{proposition}
 
-The two-state case of the reduction, a pair of linear ODEs, appears in \citet{elliott2002} for the Vasicek bond.
+The two-state case of the reduction, a pair of linear ODEs, is in \citet{cotton2001} and again in \citet{elliott2002} for the Vasicek bond.
 One form covers the whole catalogue, including the terminal exponents that bond options need and the complex
 forcings of characteristic functions. The models outside the catalogue are exactly those with a non-commuting
 switched operator, and they are priced at first order below.
