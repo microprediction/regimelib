@@ -62,7 +62,7 @@ Time-stepping on the coupled system ``u_i' = L_i u_i + sum_j Q_ij u_j``, Rannach
 Crank–Nicolson. American exercise projects onto the payoff after every step; a knock-out barrier truncates the grid
 at the barrier node; Bermudan swaptions and coupon-bond options compare with the exercise value, per regime, at
 each exercise date on a short-rate grid (Vasicek, CIR, Hull–White in its zero-mean factor, G2 on a two-factor grid
-with ``n = (nx, ny)``). ``delta``, ``gamma`` and ``theta`` come from the grid for equity options.
+with ``n = (nx, ny)``); American options under the hybrid model on a ``(log S, r)`` grid. ``delta``, ``gamma`` and ``theta`` come from the grid for equity options.
 
 .. code-block:: python
 

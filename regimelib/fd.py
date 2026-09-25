@@ -52,8 +52,15 @@ class SwitchingFDEngine:
         return u
 
     def _greeks(self, grid, v, x0, Big, nR):
-        """Spot greeks from the regime block; the grid is in log price for Black-Scholes, in price for CEV."""
+        """Spot greeks from the regime block; the grid is in log price for Black-Scholes, in price for CEV. On a
+        two-dimensional grid (log S, r) the derivatives are taken along log S at the starting rate."""
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
+        if hasattr(grid, "gx"):                                          # Grid2D: (log S, second factor)
+            u2 = v[blk].reshape(len(grid.x), len(grid.v)); j = int(np.argmin(abs(grid.v - x0[1])))
+            u, h = u2[:, j], grid.gx.h; i = int(np.argmin(abs(grid.x - x0[0]))); S0 = self.model.S0
+            ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
+            theta = -(Big @ v)[blk].reshape(len(grid.x), len(grid.v))[i, j]
+            return {"value": grid.interp(v[blk], x0), "delta": ux / S0, "gamma": (uxx - ux) / (S0 * S0), "theta": theta}
         u = v[blk]; h = grid.h; i = int(np.argmin(abs(grid.x - x0)))
         ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
         S0 = self.model.S0; logGrid = abs(math.exp(grid.x[i]) - S0) < abs(grid.x[i] - S0)

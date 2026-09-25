@@ -99,7 +99,8 @@ Hybrid models
 An equity (``SwitchingBlackScholesProcess`` or ``SwitchingHestonModel``) with stochastic rates (``SwitchingVasicek``
 or ``SwitchingHullWhite``) on one chain, so that the discount and the return are dependent through the regime path.
 ``rho`` is the equity–rate Brownian correlation, allowed for the Black–Scholes equity. Vanilla options by Lewis's
-formula with the discounted characteristic function. Frozen limit: ``AnalyticBSMHullWhiteEngine``,
+formula with the discounted characteristic function; American options by :func:`rl.SwitchingFDEngine` on a
+``(log S, r)`` grid, ``n = (nx, nr)``, for the Black–Scholes equity with Vasicek rates. Frozen limit: ``AnalyticBSMHullWhiteEngine``,
 ``AnalyticHestonHullWhiteEngine``.
 
 .. code-block:: python

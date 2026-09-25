@@ -31,7 +31,7 @@ print(opt.NPV())
 | `Merton76Process` | `SwitchingMerton76Process(chain, S0, r, q, sigma, jumpIntensity, logJumpMean, logJumpVol)` | `sigma`, `jumpIntensity` |
 | `BatesModel` | `SwitchingBatesModel(chain, S0, r, q, v0, kappa, theta, sigma, rho, jumpIntensity, logJumpMean, logJumpVol)` | `theta`, `jumpIntensity` |
 | `VarianceGammaProcess` | `SwitchingVarianceGammaProcess(chain, S0, r, q, sigma, nu, theta)` | all three |
-| `HybridHestonHullWhiteProcess` + `AnalyticHestonHullWhiteEngine`, `AnalyticBSMHullWhiteEngine` | `SwitchingEquityRates(equity, rates)`: Black–Scholes or Heston with Vasicek or Hull–White on one chain, equity–rate correlation `rho` for the Black–Scholes equity; Lewis with the discounted characteristic function | whatever the two parts switch |
+| `HybridHestonHullWhiteProcess` + `AnalyticHestonHullWhiteEngine`, `AnalyticBSMHullWhiteEngine` | `SwitchingEquityRates(equity, rates)`: Black–Scholes or Heston with Vasicek or Hull–White on one chain, equity–rate correlation `rho` for the Black–Scholes equity; Lewis with the discounted characteristic function; American options on the (log S, r) grid | whatever the two parts switch |
 | `ZeroCouponBond`, `VanillaOption` | same names, `setPricingEngine`, `NPV()` | starting `regime` on the engine |
 | `HullWhite(termStructure, a, sigma)` | `SwitchingHullWhite(chain, termStructure, a, sigma)`, curve as a flat rate, a callable or a QuantLib handle | `sigma` |
 | `G2(termStructure, a, sigma, b, eta, rho)` | `SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)` | `sigma`, `eta`, `rho` |
@@ -101,8 +101,7 @@ constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), whi
 function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: greeks in model parameters from the closed forms; American options under the hybrid model; a
-non-uniform grid for the two-factor engines.
+Roadmap: greeks in model parameters from the closed forms; a non-uniform grid for the two-factor engines.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
 
