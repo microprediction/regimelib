@@ -74,3 +74,22 @@ def test_two_state_constant_forcing_is_exact():
             assert abs(sym - num[regime]) < 1e-12 * abs(num[regime])
             bs = f.evaluate(f.blackScholes(regime), q12=3.0, q21=5.0, u=u, sigma1=0.4, sigma2=0.15, T=1.5)
             assert abs(bs - num[regime]) < 1e-10 * abs(num[regime])
+
+
+def test_cir_first_order_formula():
+    from regimelib.symbolic import CIRBondFirstOrder
+    chain = rl.RegimeChain([[-5, 3, 2], [4, -9, 5], [1, 6, -7]]); k_, thetas, sigma_, r0_, T_ = 0.6, [0.06, 0.03, 0.01], 0.08, 0.03, 4.0
+    f = CIRBondFirstOrder()
+    # I2 = int B^2 from the Riccati identity against quadrature
+    from scipy.integrate import quad
+    h = math.sqrt(k_ ** 2 + 2 * sigma_ ** 2); B = lambda t: 2 * (math.exp(h * t) - 1) / ((h + k_) * (math.exp(h * t) - 1) + 2 * h)
+    vals0 = dict(r0=r0_, k=k_, sigma=sigma_, T=T_, thetabar=0.04, Kcc=1.0, mc=0.0)
+    assert f.evaluate(f.terms["green_kubo"], **vals0) == pytest.approx(quad(lambda t: B(t) ** 2, 0, T_)[0], rel=1e-10)
+    for regime in (0, 1, 2):
+        vals = dict(r0=r0_, k=k_, sigma=sigma_, T=T_, **f.coefficients(chain, k_, thetas, regime))
+        model = rl.SwitchingCoxIngersollRoss(chain, r0_, thetas, k_, sigma_)
+        bond = rl.ZeroCouponBond(T_); bond.setPricingEngine(rl.FastSwitchingEngine(model, order=1, regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-9)
+        bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=regime))
+        assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)
+        assert f.evaluate(f.greek("r0"), **vals) == pytest.approx(-f.evaluate(f.B * f.price, **vals), rel=1e-12)   # delta = -B P

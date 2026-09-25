@@ -91,12 +91,13 @@ Greeks as formulas: `regimelib.symbolic.VasicekTwoStateBond(regime)` builds the 
 as a sympy expression and `.greek('r0')`, `.greek('theta1')`, `.greek('lam')`, `.theta()` are its symbolic
 derivatives; `.evaluate(expr, **values)` evaluates one. The formula equals the engine at order 2 to 1e-12, and the
 symbolic greeks match finite differences of the numerical solution (`tests/test_symbolic.py`).
-`regimelib.symbolic.TwoStateConstantForcing` is the exact, all-orders solution of the two-regime reduced system with
+`regimelib.symbolic.VasicekBondFirstOrder` and `CIRBondFirstOrder` give the first-order bond under any finite chain (Green–Kubo
+and memory coefficients from `coefficients(chain, ...)`, the CIR integrals closed by the Riccati identity). `regimelib.symbolic.TwoStateConstantForcing` is the exact, all-orders solution of the two-regime reduced system with
 constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), which is the closed-form characteristic
 function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); correlated Heston-Hull-White with a switched rate level; swaptions under G2; greeks in
+Roadmap: symbolic closed forms for jumps at first order; correlated Heston-Hull-White with a switched rate level; swaptions under G2; greeks in
 model parameters from the closed forms.
 
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.

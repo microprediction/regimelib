@@ -165,3 +165,52 @@ class TwoStateConstantForcing:
             self._fn[key] = (names, sp.lambdify([sp.Symbol(n) for n in names], expr, "mpmath"))
         names, f = self._fn[key]
         return complex(f(*[values[n] for n in names]))
+
+
+# ---------------------------------------------------------------- CIR with a switching mean level, first order
+class CIRBondFirstOrder:
+    """CIR bond dr = k (theta_y - r) dt + sigma sqrt(r) dW under any finite chain, first order in the holding time,
+    as a formula. Only the mean level switches, so g_i(t) = c_i B(t) with c_i = -k theta_i and B the Riccati solution
+    B(t) = 2 (e^{ht} - 1) / ((h + k)(e^{ht} - 1) + 2h), h = sqrt(k^2 + 2 sigma^2). With K_cc the Green-Kubo integral
+    of c and m_c = -(Q# c~)_i for the starting regime i:
+
+        log P_i = -B(T) r0 - k thetabar I1 + K_cc I2 + log(1 + m_c B(T)),   I_n = int_0^T B^n dt,
+
+    where I1 = -(2/sigma^2) log A(T) with A the classical CIR function, and the Riccati equation
+    B' = 1 - k B - sigma^2 B^2 / 2 gives I2 = (2/sigma^2) (T - k I1 - B(T)) without any further integration."""
+    k_, sig_, Kc_, mc_ = sp.symbols("k sigma K_cc m_c", positive=True)
+    symbols = dict(r0=r0, k=k_, sigma=sig_, T=T, thetabar=thbar, Kcc=Kc_, mc=mc_)
+
+    def __init__(self):
+        k, sig = self.k_, self.sig_
+        h = sp.sqrt(k ** 2 + 2 * sig ** 2)
+        E = sp.exp(h * T)
+        BT = 2 * (E - 1) / ((h + k) * (E - 1) + 2 * h)
+        logA = sp.log(2 * h * sp.exp((h + k) * T / 2) / ((h + k) * (E - 1) + 2 * h))
+        I = {1: -2 / sig ** 2 * logA}
+        I[2] = 2 / sig ** 2 * (T - k * I[1] - BT)
+        self.h, self.B = h, BT
+        self.terms = {"state": -BT * r0, "averaged": -k * thbar * I[1], "green_kubo": self.Kc_ * I[2],
+                      "memory": sp.log(1 + self.mc_ * BT)}
+        self.logPrice = sum(self.terms.values()); self.price = sp.exp(self.logPrice)
+        self._fn = {}
+
+    @staticmethod
+    def coefficients(chain, k, thetas, regime=0):
+        import numpy as np
+        from .firstorder import green_kubo
+        c = -k * np.asarray(thetas, float)
+        K, M = green_kubo(chain, [c]); pi = chain.stationaryDistribution()
+        return dict(thetabar=float(pi @ thetas), Kcc=float(K[0, 0]), mc=float(-M[0, regime]))
+
+    def greek(self, *wrt):
+        e = self.price
+        for name in wrt:
+            e = sp.diff(e, self.symbols[name])
+        return e
+
+    def evaluate(self, expr, **values):
+        key = sp.srepr(expr)
+        if key not in self._fn:
+            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
+        return float(self._fn[key](*[values[n] for n in self.symbols]))
