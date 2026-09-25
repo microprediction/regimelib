@@ -51,11 +51,17 @@ differential equations in which the chain and the model meet only through the ge
 reduction, and the asymptotic expansion of its solution when the chain is fast in the mean holding time, were
 carried out for the Ornstein--Uhlenbeck bond and the survival probability in the author's thesis
 \citep{cotton2001}. The two-state reduction for the Vasicek bond appears again in \citet{elliott2002}, and
-American options with switching in \citet{buffington2002}. \citet{yin2009option} expanded the coupled
+American options with switching in \citet{buffington2002}.
+
+\citet{yin2009option} expanded the coupled
 Black--Scholes equations in the holding time of a fast chain, with the averaged volatility at leading order and
-uniform error bounds; the general theory of two-time-scale Markov chains, forward and backward equations without
-a potential term, is \citet{yin2013} and \citet{yin2009backward}; and the parallel expansion for fast stochastic
-volatility, with a chain among the admissible drivers, is \citet{sircar1999}.
+uniform error bounds, and \citet{basu2009} corrected the risk-minimising option price for a fast and for a slow
+chain. The general theory of two-time-scale Markov chains, forward and backward equations without a potential
+term, is \citet{yin2013} and \citet{yin2009backward}; \citet{nguyen2011,nguyen2013} carried the same expansion,
+with a terminal layer and uniform error bounds, to the backward equation of a switching diffusion, where the
+regime enters through the diffusion operator rather than a potential. The parallel expansion for fast stochastic
+volatility, with a chain among the admissible drivers, is \citet{sircar1999}, and for a fast diffusion driving the
+volatility \citet{khasminskii2005}.
 
 The reduced system has one form for every model in \ql{} \citep{quantlib}: a forcing $g_i(t)$ per regime. Its
 solution expands in the mean holding time to any order, with an initial layer, and the terms are the averaged
@@ -145,7 +151,7 @@ each order an equation $Q_1 w = f$, which has a solution only when $\pi\cdot f =
 for the singular matrix $Q_1$); the solvability conditions determine the projections onto $\mathbf 1$, the
 particular solutions are given by the group inverse $Q_1^{\#}$ \citep{meyer1975}, and the initial condition
 $a(0) = a_0$, which the outer expansion cannot satisfy regime by regime, is met by an initial layer in the fast
-time $\tau/\eps$. The construction is standard singular perturbation \citep{yin2013}; the potential term $\diag g$ is what
+time $\tau/\eps$. The construction is standard singular perturbation \citep{yin2013,nguyen2013}; the potential term $\diag g$ is what
 separates the reduced system from the backward equations treated there. The terms have a form that can be stated.
 
 \begin{theorem}[Expansion with initial layer]
