@@ -95,7 +95,7 @@ function of every two-regime Black–Scholes, Merton or variance-gamma model: `.
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
 Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
-correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; options under G2 and Hull-White; greeks in
+correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; bond options under G2; Bermudan swaptions on the CIR grid; greeks in
 model parameters from the closed forms.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
