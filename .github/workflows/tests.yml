@@ -9,3 +9,4 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -e . pytest QuantLib
       - run: python -m pytest -q tests
+        timeout-minutes: 30

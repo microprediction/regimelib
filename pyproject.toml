@@ -4,7 +4,7 @@ version = "0.0.1"
 description = "QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion"
 readme = "README.md"
 requires-python = ">=3.9"
-dependencies = ["numpy", "scipy", "mpmath"]
+dependencies = ["numpy", "scipy", "mpmath", "sympy"]
 [project.optional-dependencies]
 test = ["pytest", "QuantLib"]
 [build-system]
