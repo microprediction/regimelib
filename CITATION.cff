@@ -1,0 +1,11 @@
+cff-version: 1.2.0
+message: "If you use regimelib, please cite it."
+title: "regimelib: QuantLib's models with a hidden Markov regime"
+authors:
+  - family-names: Cotton
+    given-names: Peter
+version: 0.1.0
+date-released: 2026-09-25
+license: MIT
+repository-code: https://github.com/microprediction/regimelib
+url: https://regimeswitching.org
