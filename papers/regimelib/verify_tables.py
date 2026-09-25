@@ -67,7 +67,9 @@ curve = ql.DefaultProbabilityTermStructureHandle(ql.SurvivalProbabilityCurve([RE
 sched3 = ql.Schedule(REF, REF + ql.Period(5, ql.Years), ql.Period(6, ql.Months), cal, ql.Unadjusted, ql.Unadjusted, ql.DateGeneration.Forward, False)
 qc = ql.CreditDefaultSwap(ql.Protection.Buyer, 1.0, 0.02, sched3, ql.Unadjusted, dc, True, True); qc.setPricingEngine(ql.MidPointCdsEngine(curve, 0.4, rts(0.03)))
 cds = rl.CreditDefaultSwap("buyer", 0.02, [0.5 * i for i in range(1, 11)], 0.4, discount=0.03); cds.setPricingEngine(eng); cds.NPV(); add("CDS fair spread, CIR intensity", cds.fairSpread(), qc.fairSpread(), "MidPointCdsEngine")
-with open("tables.tex", "w") as f:
+import io
+f = io.StringIO()
+if True:
     f.write("\\begin{tabular}{llrrr}\\toprule\nInstrument & QuantLib engine & regimelib & QuantLib & rel.\\ diff.\\\\\\midrule\n")
     for name, engine, a, b_, e in rows:
         f.write(f"{name} & \\texttt{{{engine}}} & {a:.8g} & {b_:.8g} & {e:.1e}\\\\\n")
@@ -80,8 +82,12 @@ with open("tables.tex", "w") as f:
         swv = rl.Swaption("payer", 2.0, [3.0, 4.0, 5.0, 6.0, 7.0], 0.035, notional=100.0)
         swv.setPricingEngine(rl.NumericalSwitchingEngine(mv)); ref = swv.NPV(); errs = []
         for order in (0, 1, 2, 3, 4, 6):
-            swv.setPricingEngine(rl.FastSwitchingEngine(mv, order=order)); errs.append(abs(swv.NPV() / ref - 1))
-        f.write(f"{eps:.3f} & " + " & ".join(f"{e:.1e}" for e in errs) + "\\\\\n")
+            swv.setPricingEngine(rl.FastSwitchingEngine(mv, order=order))
+            try:
+                errs.append(f"{abs(swv.NPV() / ref - 1):.1e}")
+            except ArithmeticError:                       # the Gil-Pelaez rule refuses a diverged expansion
+                errs.append("diverged")
+        f.write(f"{eps:.3f} & " + " & ".join(errs) + "\\\\\n")
     f.write("\\bottomrule\\end{tabular}\n")
     # ---------------------------------------------------------------- timings
     f.write("\n%% timings\n\\begin{tabular}{lrrr}\\toprule\nInstrument (switching on) & expansion, order 4 & numerical & grid / Monte Carlo\\\\\\midrule\n")
@@ -117,4 +123,10 @@ with open("tables.tex", "w") as f:
         fd = (bumped(h) - bumped(-h)) / (2 * h)
         f.write(f"{label} & {g:.8g} & {fd:.8g} & {abs(g/fd-1):.1e}\\\\\n")
     f.write("\\bottomrule\\end{tabular}\n")
-print(open("tables.tex").read())
+text = f.getvalue()
+parts = text.split("\n%% ")
+names = ["frozen", "orders", "timings", "greeks"]
+for name, part in zip(names, parts):
+    body = part.split("\n", 1)[1] if name != "frozen" else part
+    open(f"tables_{name}.tex", "w").write(body)
+print(text)

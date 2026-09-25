@@ -1,6 +1,6 @@
 \documentclass[11pt]{article}
 \usepackage[margin=1.1in]{geometry}
-\usepackage{amsmath,amssymb,amsthm,booktabs,graphicx,hyperref,url,microtype}
+\usepackage{amsmath,amssymb,amsthm,booktabs,graphicx,xcolor,hyperref,url,microtype}
 \usepackage[numbers,sort&compress]{natbib}
 \hypersetup{colorlinks=true,linkcolor=blue!50!black,citecolor=blue!50!black,urlcolor=blue!50!black}
 \newtheorem{theorem}{Theorem}
@@ -98,7 +98,7 @@ the library. Characteristic functions are the same statement with a complex payo
 log return $X_T$ of an equity model, $\E[e^{iuX_T}\mid y_0 = i] = c(u)\,a_i(T)$ with the forcing evaluated at $u$.
 
 \begin{table}[t]
-\centering\small
+\centering\footnotesize
 \begin{tabular}{lll}\toprule
 Model & switching parameters & forcing $g_i(\tau)$ \\\midrule
 Vasicek $dr = a(b - r)\dd t + \sigma \dd W$ & $b,\ \sigma$ & $-a b_i B + \tfrac12 \sigma_i^2 B^2$, $B = (1-e^{-a\tau})/a$ \\
@@ -157,8 +157,8 @@ layer terms $\ell^{(0)},\dots,\ell^{(N)}$, each computable from $Q_1^{\#}$, $\pi
 uniformly on $[0,T]$, with $\ell^{(k)}$ decaying exponentially in $\tau/\eps$. The leading terms are
 \begin{align}
   a^{(0)}_i(\tau) &= \exp\Big(\int_0^\tau \bar g\Big), \qquad \bar g = \pi\cdot g, \label{eq:order0}\\
-  a^{(1)}_i(\tau) &= a^{(0)}(\tau)\Big(\int_0^\tau K(s)\dd s \;-\; m_i(\tau)\Big), \qquad
-  K(s) = -\,\pi\cdot\big(\tilde g(s)\odot Q_1^{\#}\tilde g(s)\big), \quad m_i(\tau) = \big(Q_1^{\#}\tilde g(\tau)\big)_i, \label{eq:order1}
+  a^{(1)}_i(\tau) &= a^{(0)}(\tau)\Big(\int_0^\tau K(s)\dd s \;-\; m_i(\tau)\Big), \label{eq:order1}\\
+  K(s) &= -\,\pi\cdot\big(\tilde g(s)\odot Q_1^{\#}\tilde g(s)\big), \qquad m_i(\tau) = \big(Q_1^{\#}\tilde g(\tau)\big)_i, \notag
 \end{align}
 where $\tilde g = g - \bar g\mathbf 1$ is the centred forcing and $\odot$ the entrywise product; $\ell^{(0)} = 0$ and
 the first layer is $\ell^{(1)}(s) = e^{Q_1 s}\,Q_1^{\#}\tilde g(0)$, which cancels $-m(0)$ at $\tau = 0$ and decays
@@ -179,7 +179,11 @@ when the switched operators do not commute (Section~\ref{sec:firstorder}). The m
 inverse applied to the centred forcing, evaluated in the starting regime; it is what distinguishes the price
 seen from regime $i$ from the price seen from regime $j$, and it decays with the layer as the chain forgets its
 start. Higher orders follow by the same recursion and the library computes them to any order, with the
-integrals done exactly when $g$ is an exponential sum and by Chebyshev series otherwise.
+integrals done exactly when $g$ is an exponential sum and by Chebyshev series otherwise. The certificate
+\texttt{verify\_theorem.py} beside this paper evaluates the residual of the order-one approximation, layer included,
+for a three-regime chain with the Vasicek forcing and with a constant forcing: the supremum over $[0,T]$ divided by
+$\eps^2$ is constant to within a few percent across $\eps = 0.2, 0.1, 0.05, 0.025$, and without the layer the
+residual for the constant forcing is $0.043\,\eps$, so the layer is not optional.
 
 \begin{remark}[The series is asymptotic]
 The expansion parameter is not $\eps$ alone but $\eps\,\|g\|$, and for a characteristic function $g$ grows with the
@@ -312,12 +316,17 @@ priced by \rl{} and by \ql{}'s engine for the same instrument. Table~\ref{tab:or
 switching on: a payer swaption under a two-regime Vasicek model (mean levels 6\% and 2\%, volatilities 1.5\% and
 0.8\%) at each order against the numerical solution of the reduced system, for four holding times. The error
 falls with the order until the asymptotic nature of the series shows, later for faster chains, and the order at
-which it stops improving is what the adaptive engine selects. Table~\ref{tab:timings} gives timings on a laptop,
-and Table~\ref{tab:greeks} the parameter sensitivities. All four tables are written by
+which it stops improving is what the adaptive engine selects. Table~\ref{tab:timings} gives timings on a laptop;
+they say where the expansion earns its keep and where it does not. For a bond, one evaluation of the series, it
+is the fastest route. For a Fourier integral the numerical engine solves the reduced system for every node in a
+single batched call, and the series evaluated node by node at order four costs more; the expansion's value there
+is the formula, the diagnostics and the greeks under the integral, not the wall clock. The Monte Carlo referee
+is pure Python and priced per path; it is a referee, not an engine. Table~\ref{tab:greeks} gives the parameter
+sensitivities. All four tables are written by
 \texttt{papers/regimelib/verify\_tables.py} in the repository.
 
 \begin{table}[t]\centering\footnotesize
-\input{tables_frozen}
+\resizebox{\textwidth}{!}{\input{tables_frozen}}
 \caption{Frozen limit: two identical regimes on a chain with rates 3 and 5 per year, against \ql{}. Grid engines
 (American, Bermudan, barrier) carry the grid's discretisation error; the characteristic-function engines agree to
 quadrature accuracy.}
