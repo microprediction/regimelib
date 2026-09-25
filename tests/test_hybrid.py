@@ -21,12 +21,14 @@ def test_black_scholes_hull_white_frozen():
     hw = ql.HullWhite(rts, a, sr)
     chain = rl.RegimeChain.twoState(3.0, 5.0)
     model = rl.SwitchingEquityRates(rl.SwitchingBlackScholesProcess(chain, S0, r, q, sigma), rl.SwitchingHullWhite(chain, rts, a, sr))
-    for kind, qk in (("call", ql.Option.Call), ("put", ql.Option.Put)):
-        o = ql.VanillaOption(ql.PlainVanillaPayoff(qk, K), ql.EuropeanExercise(REF + ql.Period(730, ql.Days)))
-        o.setPricingEngine(ql.AnalyticBSMHullWhiteEngine(0.0, proc, hw))
-        ours = rl.VanillaOption((kind, K), maturity=730 / 365)
-        ours.setPricingEngine(rl.NumericalSwitchingEngine(model)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
-        ours.setPricingEngine(rl.FastSwitchingEngine(model, order=2)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
+    for rho in (0.0, 0.4, -0.7):
+        model = rl.SwitchingEquityRates(rl.SwitchingBlackScholesProcess(chain, S0, r, q, sigma), rl.SwitchingHullWhite(chain, rts, a, sr), rho=rho)
+        for kind, qk in (("call", ql.Option.Call), ("put", ql.Option.Put)):
+            o = ql.VanillaOption(ql.PlainVanillaPayoff(qk, K), ql.EuropeanExercise(REF + ql.Period(730, ql.Days)))
+            o.setPricingEngine(ql.AnalyticBSMHullWhiteEngine(rho, proc, hw))
+            ours = rl.VanillaOption((kind, K), maturity=730 / 365)
+            ours.setPricingEngine(rl.NumericalSwitchingEngine(model)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
+            ours.setPricingEngine(rl.FastSwitchingEngine(model, order=2)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
 
 
 def test_heston_hull_white_frozen():
