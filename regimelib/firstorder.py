@@ -6,6 +6,7 @@ K the Green-Kubo matrix of the chain (integral of the autocovariance of the coef
 -(Q# f~)_i . A e^{T L_bar} u0 for a start in regime i. The Duhamel integral is the second block of one matrix
 exponential of [[L_bar, 0], [K A A, L_bar]] applied to (u0, 0). Finite differences on a grid the model supplies."""
 import math
+import warnings
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
@@ -46,9 +47,10 @@ class Grid1D:
 class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""
-    def __init__(self, model, regime=0, n=801, width=None):
+    def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03):
         self.model, self.regime, self.n, self.width = model, regime, n, width
         self.averaged = self.correction = self.memory = None
+        self.warnAbove = warnAbove; self.diagnostics = {}
 
     def calculate(self, instrument):
         if not isinstance(instrument, VanillaOption):
@@ -63,6 +65,16 @@ class FirstOrderFDEngine:
         ubar, u1 = v[:grid.n], v[grid.n:]
         mem = sum(-M[j, self.regime] * (As[j] @ ubar) for j in range(len(As)))
         self.averaged, self.correction, self.memory = grid.interp(ubar, x0), grid.interp(u1, x0), grid.interp(mem, x0)
+        scale = max(abs(self.averaged), 1e-300)
+        self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=abs(self.correction) / scale,
+                                memoryRelative=abs(self.memory) / scale)
+        rel = self.diagnostics["correctionRelative"] + self.diagnostics["memoryRelative"]
+        self.diagnostics["estimatedError"] = rel * rel               # the neglected second-order term, checked against the referee
+        if rel > self.warnAbove:
+            from .engines import ExpansionWarning
+            warnings.warn(f"the first-order correction is {rel:.1e} of the averaged value (holding time "
+                          f"{m.chain.meanHoldingTime():.3g}); the neglected second-order term is about its square, {rel * rel:.1e}. "
+                          "Use SwitchingFDReferee for the switching solution.", ExpansionWarning, stacklevel=3)
         return self.averaged + self.correction + self.memory
 
 

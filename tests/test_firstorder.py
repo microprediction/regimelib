@@ -48,3 +48,19 @@ def test_cev_frozen_matches_quantlib():
     assert fd.correction == pytest.approx(0.0, abs=1e-12) and fd.memory == pytest.approx(0.0, abs=1e-12)
     # the spot process sigma S^beta drifts, the forward process does not: the volatility scales differ by e^{(beta - 1) r t}
     assert v == pytest.approx(qopt.NPV(), rel=5e-3)
+
+
+def test_first_order_diagnostics_track_the_error():
+    """The neglected term is about the square of the relative first-order correction; slower chains warn."""
+    import warnings
+    errs, ests = [], []
+    for rates in ((10.0, 10.0), (2.0, 2.0)):
+        m = rl.SwitchingCEVProcess(rl.RegimeChain.twoState(*rates), 100.0, 0.03, 0.0, [0.35, 0.15], 0.7)
+        o = rl.VanillaOption(("call", 100.0), maturity=1.0); e = rl.FirstOrderFDEngine(m, regime=0, n=801); o.setPricingEngine(e)
+        with warnings.catch_warnings(record=True) as w:
+            warnings.simplefilter("always"); v = o.NPV()
+        assert bool(w) == (rates == (2.0, 2.0))
+        o.setPricingEngine(rl.SwitchingFDReferee(m, regime=0, n=801)); ref = o.NPV()
+        errs.append(abs(v - ref) / ref); ests.append(e.diagnostics["estimatedError"])
+    for err, est in zip(errs, ests):
+        assert 0.3 * est < err < 3 * est
