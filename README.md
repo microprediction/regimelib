@@ -87,8 +87,12 @@ Greeks as formulas: `regimelib.symbolic.VasicekTwoStateBond(regime)` builds the 
 as a sympy expression and `.greek('r0')`, `.greek('theta1')`, `.greek('lam')`, `.theta()` are its symbolic
 derivatives; `.evaluate(expr, **values)` evaluates one. The formula equals the engine at order 2 to 1e-12, and the
 symbolic greeks match finite differences of the numerical solution (`tests/test_symbolic.py`).
+`regimelib.symbolic.TwoStateConstantForcing` is the exact, all-orders solution of the two-regime reduced system with
+constant forcing (a 2 × 2 matrix exponential written with its eigenvalues), which is the closed-form characteristic
+function of every two-regime Black–Scholes, Merton or variance-gamma model: `.a(regime)` in `q12, q21, g1, g2, T`
+and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
-Roadmap: symbolic closed forms for CIR, jumps, Black-Scholes and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
+Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
 correlated Heston-Hull-White with a switched rate level; two-name credit; options under G2 and Hull-White; greeks in
 model parameters from the closed forms.
 

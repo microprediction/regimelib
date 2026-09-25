@@ -55,3 +55,22 @@ def test_first_order_formula_for_three_regimes():
         bond.setPricingEngine(rl.NumericalSwitchingEngine(rl.SwitchingVasicek(chain, r0_, kappa_, thetas, sigmas), regime=regime))
         assert f.evaluate(f.price, **vals) == pytest.approx(bond.NPV(), rel=1e-3)      # first order at eps = 3/21
     assert sp.simplify(f.greek("r0") / f.price + (1 - sp.exp(-f.symbols["kappa"] * f.symbols["T"])) / f.symbols["kappa"]) == 0
+
+
+def test_two_state_constant_forcing_is_exact():
+    """The closed-form two-state solution equals the numerical solution of the reduced system to round-off, and its
+    Black-Scholes specialisation is the characteristic function the numerical engine integrates."""
+    import numpy as np
+    from regimelib.symbolic import TwoStateConstantForcing
+    from regimelib.engines import _numericalAVector
+    from regimelib._engine.models import bs_switching
+    f = TwoStateConstantForcing()
+    chain = rl.RegimeChain.twoState(3.0, 5.0); Q = chain.generator
+    for u in (0.7, 2.5 - 0.5j):
+        g, gfuncs = bs_switching(u, 0.0, [0.4, 0.15])
+        num = _numericalAVector(Q, g, gfuncs, 1.5)
+        for regime in (0, 1):
+            sym = f.evaluate(f.a(regime), q12=3.0, q21=5.0, g1=complex(g[0].value(0)), g2=complex(g[1].value(0)), T=1.5)
+            assert abs(sym - num[regime]) < 1e-12 * abs(num[regime])
+            bs = f.evaluate(f.blackScholes(regime), q12=3.0, q21=5.0, u=u, sigma1=0.4, sigma2=0.15, T=1.5)
+            assert abs(bs - num[regime]) < 1e-10 * abs(num[regime])

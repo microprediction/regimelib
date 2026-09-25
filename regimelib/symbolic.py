@@ -123,3 +123,45 @@ class VasicekBondFirstOrder:
         if key not in self._fn:
             self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
         return float(self._fn[key](*[values[n] for n in self.symbols]))
+
+
+# ---------------------------------------------------------------- two states, constant forcing: exact, all orders
+class TwoStateConstantForcing:
+    """The reduced system a' = (Q + diag g) a with two regimes and constant forcing g = (g1, g2), which is every
+    Black-Scholes, Merton and variance-gamma characteristic function under switching, has the exact solution
+    exp(M T) 1 with M the 2 x 2 matrix, written with its two eigenvalues mu_pm = (tr M +- sqrt(tr M^2 - 4 det M)) / 2:
+
+        a(T) = [e^{mu+ T} (M - mu- I) - e^{mu- T} (M - mu+ I)] 1 / (mu+ - mu-).
+
+    `a(regime)` is that formula as a sympy expression in q12, q21, g1, g2, T; the characteristic function of a
+    switching Black-Scholes log return is `blackScholes(regime)` with g_i = -u^2 sigma_i^2 / 2 for the martingale
+    return and u kept symbolic, so that d/du under Lewis's integral gives the greeks in closed form."""
+    q12, q21, g1, g2, T, u, s1, s2 = sp.symbols("q12 q21 g1 g2 T u sigma1 sigma2")
+    symbols = dict(q12=q12, q21=q21, g1=g1, g2=g2, T=T)
+
+    def __init__(self):
+        q12, q21, g1, g2, T = self.q12, self.q21, self.g1, self.g2, self.T
+        M = sp.Matrix([[g1 - q12, q12], [q21, g2 - q21]])
+        tr, det = M.trace(), M.det()
+        disc = sp.sqrt(tr ** 2 - 4 * det)
+        self.mu_plus, self.mu_minus = (tr + disc) / 2, (tr - disc) / 2
+        I2 = sp.eye(2)
+        E = (sp.exp(self.mu_plus * T) * (M - self.mu_minus * I2) - sp.exp(self.mu_minus * T) * (M - self.mu_plus * I2)) / disc
+        self.vector = E * sp.Matrix([1, 1])
+        self._fn = {}
+
+    def a(self, regime=0):
+        return sp.simplify(self.vector[regime])
+
+    def blackScholes(self, regime=0):
+        """E[exp(i u X_T) | y_0 = regime] for the martingale log return of a two-state Black-Scholes model."""
+        u, s1, s2 = self.u, self.s1, self.s2
+        return self.vector[regime].subs({self.g1: -u * (u + sp.I) * s1 ** 2 / 2, self.g2: -u * (u + sp.I) * s2 ** 2 / 2})
+
+    def evaluate(self, expr, **values):
+        key = sp.srepr(expr)
+        if key not in self._fn:
+            names = sorted(str(s) for s in expr.free_symbols)
+            self._fn[key] = (names, sp.lambdify([sp.Symbol(n) for n in names], expr, "mpmath"))
+        names, f = self._fn[key]
+        return complex(f(*[values[n] for n in names]))
