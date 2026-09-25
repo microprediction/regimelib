@@ -3,6 +3,8 @@
 QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion of
 [homogenization.microprediction.org](https://homogenization.microprediction.org).
 
+Documentation: [regimelib.microprediction.org](https://regimelib.microprediction.org) (QuantLib-Python's layout: instruments, engines, models, helpers, examples).
+
 Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it
 mirrors; that is a test (`tests/test_quantlib_limit.py`), checked to about 1e-9.
