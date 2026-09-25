@@ -109,25 +109,28 @@ class SwitchingFDEngine:
     def _rateOption(self, inst):
         m = self.model
         if not hasattr(m, "bondOnGrid"):
-            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek)")
+            raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite)")
         Big, grid, _, r0, nR = self._system(inst, self.width)
         if isinstance(inst, Swaption):
             exercises = inst.exerciseTimes or [inst.maturity]; isCall, K = not inst.isPayer, inst.notional
         else:
             exercises = [inst.maturity]; isCall, K = inst.isCall, inst.strike
+        T_end = exercises[-1]
         def exerciseValue(t):
-            """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid."""
-            bond = sum(c * m.bondOnGrid(grid.x, S - t) for S, c in inst.cashflows if S > t + 1e-12)
-            return np.maximum(bond - K, 0.0) if isCall else np.maximum(K - bond, 0.0)
+            """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid, expressed in
+            the grid's numeraire: the grid discounts with the factor only, the fitted drift's part is deterministic."""
+            bond = sum(c * m.bondOnGrid(grid.x, t, S) for S, c in inst.cashflows if S > t + 1e-12)
+            ex = np.maximum(bond - K, 0.0) if isCall else np.maximum(K - bond, 0.0)
+            return ex / m.deterministicDiscount(t, T_end)
         steps = self.steps
-        u = exerciseValue(exercises[-1]).ravel()
-        t_hi = exercises[-1]
+        u = exerciseValue(T_end).ravel()
+        t_hi = T_end
         for t_lo in list(reversed(exercises[:-1])) + [0.0]:
-            self.steps = max(4, int(round(steps * (t_hi - t_lo) / exercises[-1])))
+            self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
             u = self._march(Big, u, t_hi - t_lo)
             if t_lo > 0:
                 u = np.maximum(u, exerciseValue(t_lo).ravel())
             t_hi = t_lo
         self.steps = steps
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
-        return {"value": grid.interp(u[blk], r0)}
+        return {"value": m.deterministicDiscount(0.0, T_end) * grid.interp(u[blk], r0)}

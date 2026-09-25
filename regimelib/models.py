@@ -53,15 +53,20 @@ class SwitchingVasicek(SwitchingModel):
         # the drift forcing (b_i - b_bar) a d_r is constant in r; the diffusion forcing (s2_i - s2_bar) d_rr / 2
         return Lbar, [Adrift, Adiff], [b, s2], grid, None, self.r0
 
-    def bondOnGrid(self, r, tau):
-        """Zero-coupon bond of maturity tau on the rate grid, one row per regime: a_j(tau) exp(-B(tau) r)."""
+    def bondOnGrid(self, r, t, S):
+        """Zero-coupon bond at time t for maturity S on the rate grid, one row per regime: a_j(S - t) exp(-B(S - t) r)."""
         from .engines import _numericalAVector
         from ._engine.models import vasicek_terminal
+        tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(r)))
         g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0)
         avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
         return avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(r, float)[None, :])
+
+    def deterministicDiscount(self, t1, t2):
+        """The part of the discounting the grid does not carry (none for Vasicek)."""
+        return 1.0
 
 
 class SwitchingCoxIngersollRoss(SwitchingModel):
@@ -200,9 +205,43 @@ class SwitchingHullWhite(SwitchingModel):
         B = ExpSum({0: 1 / a, a: -1 / a})
         g = [(B * B).scale(0.5 * s * s) for s in self.sigma]
         gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
-        int_shift = s2bar / (2 * a * a) * (T - 2 * (1 - math.exp(-a * T)) / a + (1 - math.exp(-2 * a * T)) / (2 * a))
-        pre = lambda t: self.discount(t) * math.exp(-int_shift if t == T else -(s2bar / (2 * a * a)) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a)))
+        pre = lambda t: self.discount(t) * math.exp(-self._intShift(t))
         return g, gfuncs, pre
+
+    def _intShift(self, t):
+        """int_0^t of the averaged variance term of phi: s2bar (1 - e^{-a s})^2 / (2 a^2) integrated."""
+        a = self.a; pi = self.chain.stationaryDistribution(); s2bar = float(pi @ np.asarray(self.sigma) ** 2)
+        return s2bar / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+
+    def deterministicDiscount(self, t1, t2):
+        """exp(-int_{t1}^{t2} phi), the discounting carried by the fitted drift rather than by the factor x."""
+        return self.discount(t2) / self.discount(t1) * math.exp(-(self._intShift(t2) - self._intShift(t1)))
+
+    def operators(self, instrument, n, width):
+        """Grid in the zero-mean factor x (r = x + phi(t)); L_i = -a x d_x + sigma_i^2 / 2 d_xx - x, the phi part of the
+        discounting being deterministic (deterministicDiscount). Started from x0 = 0."""
+        from .firstorder import Grid1D
+        pi = self.chain.stationaryDistribution(); s2 = np.asarray(self.sigma, float) ** 2; s2bar = float(pi @ s2)
+        if isinstance(width, tuple):
+            grid = Grid1D(width[0], width[1], n)
+        else:
+            L = width or 8 * math.sqrt(max(s2) / (2 * self.a))
+            grid = Grid1D(-L, L, n)
+        D1, D2 = grid.d1(), grid.d2(); x = grid.x
+        Adiff = 0.5 * D2
+        Lbar = -self.a * sp.diags(x) @ D1 + s2bar * Adiff - sp.diags(x)
+        return Lbar, [Adiff], [s2], grid, None, 0.0
+
+    def bondOnGrid(self, x, t, S):
+        """Bond at time t for maturity S on the factor grid, per regime: exp(-int_t^S phi) a_j(S - t) exp(-B(S - t) x)."""
+        from .engines import _numericalAVector
+        from ._engine.models import vasicek_terminal
+        tau = S - t
+        if tau <= 0:
+            return np.ones((self.n, len(x)))
+        g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0)
+        avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
+        return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(x, float)[None, :])
 
 
 class SwitchingG2(SwitchingModel):

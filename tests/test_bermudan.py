@@ -54,3 +54,30 @@ def test_bermudan_dominates_european_with_switching():
     for x in (eu, be):
         x.setPricingEngine(rl.SwitchingFDEngine(model, regime=0, n=1201, steps=400))
     assert be.NPV() > eu.NPV() > 0
+
+
+def test_hull_white_bermudan_frozen_matches_fd_and_european_matches_jamshidian():
+    ql.Settings.instance().evaluationDate = REF
+    r, a, sigma, K = 0.03, 0.5, 0.012, 0.035
+    cal, dc = ql.NullCalendar(), ql.Actual365Fixed()
+    ts = ql.YieldTermStructureHandle(ql.FlatForward(REF, r, dc)); hw = ql.HullWhite(ts, a, sigma)
+    index = ql.IborIndex("idx", ql.Period(1, ql.Years), 0, ql.USDCurrency(), cal, ql.Unadjusted, False, dc, ts)
+    start = REF + ql.Period(1, ql.Years); end = start + ql.Period(5, ql.Years)
+    sched = ql.Schedule(start, end, ql.Period(1, ql.Years), cal, ql.Unadjusted, ql.Unadjusted, ql.DateGeneration.Forward, False)
+    swap = ql.VanillaSwap(ql.VanillaSwap.Payer, 1.0, sched, K, dc, sched, index, 0.0, dc)
+    be = ql.Swaption(swap, ql.BermudanExercise(list(sched)[:-1]))
+    be.setPricingEngine(ql.FdHullWhiteSwaptionEngine(hw, 400, 400))       # the tree converges to this from above
+    fixed_times = [dc.yearFraction(REF, d) for d in list(sched)[1:]]; ex_times = [dc.yearFraction(REF, d) for d in list(sched)[:-1]]
+    chain = rl.RegimeChain.twoState(3.0, 5.0)
+    frozen = rl.SwitchingHullWhite(chain, ts, a, sigma)
+    ours = rl.Swaption("payer", ex_times[0], fixed_times, K, notional=1.0, exerciseTimes=ex_times)
+    ours.setPricingEngine(rl.SwitchingFDEngine(frozen, n=1201, steps=600))
+    assert ours.NPV() == pytest.approx(be.NPV(), rel=1e-4)
+    # with switching: the European swaption on the grid equals the Jamshidian value, and Bermudan dominates
+    switching = rl.SwitchingHullWhite(rl.RegimeChain.twoState(6.0, 4.0), ts, a, [0.02, 0.006])
+    eu = rl.Swaption("payer", ex_times[0], fixed_times, K, notional=1.0)
+    eu.setPricingEngine(rl.NumericalSwitchingEngine(switching, regime=1)); ref = eu.NPV()
+    eu.setPricingEngine(rl.SwitchingFDEngine(switching, regime=1, n=1201, steps=400))
+    assert eu.NPV() == pytest.approx(ref, rel=3e-4)
+    ours.setPricingEngine(rl.SwitchingFDEngine(switching, regime=1, n=1201, steps=600))
+    assert ours.NPV() > ref
