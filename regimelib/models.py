@@ -278,6 +278,39 @@ class SwitchingG2(SwitchingModel):
         return pre(t2) / pre(t1)
 
 
+# ---------------------------------------------------------------- several intensities on one regime chain
+class SwitchingIntensityBasket(SwitchingModel):
+    """Default intensities lambda^1, ..., lambda^K (SwitchingVasicek or SwitchingCoxIngersollRoss instances) driven
+    by the same regime chain, with independent diffusions. The joint survival E exp(-int sum_k lambda^k) is the
+    bond of the summed forcing with the product of the prefactors, so ZeroCouponBond(t) is the probability that no
+    name has defaulted by t and CreditDefaultSwap is a first-to-default swap. The common regime is the only source
+    of dependence: defaultCorrelation(t) measures it."""
+    def __init__(self, models):
+        chain = models[0].chain
+        if any(m.chain is not chain for m in models):
+            raise ValueError("every intensity must be driven by the same RegimeChain instance")
+        super().__init__(chain)
+        self.models = list(models)
+
+    def bondForcing(self, T):
+        parts = [m.bondForcing(T) for m in self.models]
+        if len({type(p[0][0]) for p in parts}) > 1:                    # exponential sums and Chebyshev series: fit all
+            parts = [([Cheb.fit(gf, T, 80) for gf in p[1]], p[1], p[2]) for p in parts]
+        g = [sum((p[0][i] for p in parts[1:]), parts[0][0][i]) for i in range(self.n)]
+        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        pres = [p[2] for p in parts]
+        return g, gfuncs, (lambda t: math.prod(pre(t) for pre in pres))
+
+    def defaultCorrelation(self, t, regime=0):
+        """Correlation of the default indicators of the first two names by time t, from the joint and marginal survivals."""
+        from .engines import NumericalSwitchingEngine
+        from .instruments import ZeroCouponBond
+        def surv(model):
+            b = ZeroCouponBond(t); b.setPricingEngine(NumericalSwitchingEngine(model, regime=regime)); return b.NPV()
+        q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
+        return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
+
+
 # ---------------------------------------------------------------- operator form for the first-order tier
 def _bs_operators(self, instrument, n, width):
     """Log-price grid; L_bar = (r - q - s2bar/2) d_x + s2bar/2 d_xx - r; the switched sigma^2 multiplies A = (d_xx - d_x)/2."""
