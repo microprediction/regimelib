@@ -118,7 +118,7 @@ class SwitchingEngine:
 
     def _bondB(self, T):
         m = self.model
-        if isinstance(m, SwitchingVasicek):
+        if isinstance(m, SwitchingVasicek) or hasattr(m, "jumpMean"):
             return (1 - math.exp(-m.a * T)) / m.a
         if hasattr(m, "k") and hasattr(m, "theta") and not hasattr(m, "S0"):      # CIR
             h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1

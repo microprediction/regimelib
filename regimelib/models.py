@@ -69,6 +69,22 @@ class SwitchingVasicek(SwitchingModel):
         return 1.0
 
 
+class SwitchingVasicekJumps(SwitchingModel):
+    """Vasicek with compound-Poisson jumps: dr = a (b_y - r) dt + sigma_y dW + dJ, J jumping at intensity
+    jumpIntensity_y with exponential jump sizes of mean jumpMean. b, sigma and the intensity may switch; the
+    reduction is exact (the forcing gains l_i (1 / (1 + m B) - 1)). QuantLib has no jump short-rate model; the frozen
+    limit is checked against the affine closed form."""
+    def __init__(self, chain, r0, a, b, sigma, jumpIntensity, jumpMean):
+        super().__init__(chain)
+        self.r0, self.a, self.jumpMean = float(r0), float(a), float(jumpMean)
+        self.b, self.sigma = _per_regime(b, self.n), _per_regime(sigma, self.n)
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+
+    def bondForcing(self, T):
+        g, gfuncs, pre = _m.vasicek_jumps(self.a, self.b, self.sigma, self.jumpIntensity, self.jumpMean, T)
+        return g, gfuncs, (lambda t: pre(t, self.r0))
+
+
 class SwitchingCoxIngersollRoss(SwitchingModel):
     """QuantLib CoxIngersollRoss(r0, theta, k, sigma): dr = k (theta - r) dt + sigma sqrt(r) dW. theta may switch."""
     def __init__(self, chain, r0, theta, k, sigma):

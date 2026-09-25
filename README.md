@@ -22,6 +22,7 @@ print(opt.NPV())
 | QuantLib | regimelib | switches |
 |---|---|---|
 | `Vasicek(r0, a, b, sigma)` | `SwitchingVasicek(chain, r0, a, b, sigma)` | `b`, `sigma` |
+| (none: no jump short-rate model in QuantLib) | `SwitchingVasicekJumps(chain, r0, a, b, sigma, jumpIntensity, jumpMean)`, exponential jumps; frozen limit against the affine closed form | `b`, `sigma`, `jumpIntensity` |
 | `CoxIngersollRoss(r0, theta, k, sigma)` | `SwitchingCoxIngersollRoss(chain, r0, theta, k, sigma)` | `theta` |
 | `BlackScholesMertonProcess` | `SwitchingBlackScholesProcess(chain, S0, r, q, sigma)` | `sigma` |
 | `HestonModel` | `SwitchingHestonModel(chain, S0, r, q, v0, kappa, theta, sigma, rho)` | `theta` |
