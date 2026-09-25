@@ -45,6 +45,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 | `ContinuousAveragingAsianOption(Geometric)` + `AnalyticContinuousGeometricAveragePriceAsianEngine` | `ContinuousGeometricAsianOption(payoff, exercise)` | the time average of the log price is a quadratic forcing in time to maturity; `FastSwitchingEngine`, `NumericalSwitchingEngine` |
 | `Swaption` + `JamshidianSwaptionEngine` | `Swaption(kind, expiry, fixedTimes, fixedRate, notional)`, `CouponBondOption(kind, K, T, cashflows)` | Jamshidian's decomposition conditioned on the regime at expiry |
 | `Cap`/`Floor` + `AnalyticCapFloorEngine` | `CapFloor(kind, times, strike, notional)` | caplet = (1 + τK) × put on the zero-coupon bond |
+| `CreditDefaultSwap` + `MidPointCdsEngine` | `CreditDefaultSwap(side, spread, times, recovery, discount)` on a switching CIR or Vasicek intensity; `fairSpread()`, `couponLegNPV()`, `defaultLegNPV()` | survival = the intensity model's bond price; mid-point protection |
 | `HestonModelHelper`, `model.calibrate(helpers, ...)` | `VolatilityHelper(T, K, vol)`, `calibrate(model, helpers, ["sigma", "chain"])` | least squares on relative price (or implied vol) errors; terminal vectors shared across strikes |
 
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
@@ -93,7 +94,7 @@ function of every two-regime Black–Scholes, Merton or variance-gamma model: `.
 and `.blackScholes(regime)` in `u, sigma1, sigma2`; the formula agrees with the numerical solution to 1e-12.
 
 Roadmap: symbolic closed forms for CIR, jumps and n regimes at first order (the explicit pages); Heston with a switched vol-of-vol (two-dimensional grid, frozen limit against `FdHestonVanillaEngine`);
-correlated Heston-Hull-White with a switched rate level; two-name credit; options under G2 and Hull-White; greeks in
+correlated Heston-Hull-White with a switched rate level; two-name credit with a common regime; options under G2 and Hull-White; greeks in
 model parameters from the closed forms.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in

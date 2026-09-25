@@ -3,6 +3,7 @@ the QuantLib evaluation date with Actual/365 (or a day counter passed as `dayCou
 import math
 
 
+import math
 import numpy as np
 
 
@@ -195,3 +196,22 @@ class CapFloor(Instrument):
         self.isCap = str(kind).lower() == "cap"
         self.times = [_years(t, dayCounter) for t in times]; self.strike, self.notional = float(strike), float(notional)
         self.maturity = self.times[-1]
+
+
+class CreditDefaultSwap(Instrument):
+    """Protection on a unit notional with premium `spread` paid at `times` (accrual from the previous time, the first
+    from now) and recovery `recovery`; the model is a switching intensity (its bond price is the survival probability)
+    and `discount` a flat rate or a callable for the risk-free curve. `side` "buyer" pays the premium. Protection is
+    valued at the mid-point of each accrual period, as QuantLib's MidPointCdsEngine, with `accrualOnDefault`."""
+    def __init__(self, side, spread, times, recovery, discount=0.0, accrualOnDefault=True, dayCounter=None):
+        super().__init__()
+        self.isBuyer = str(side).lower() == "buyer"
+        self.spread, self.recovery = float(spread), float(recovery)
+        self.times = [_years(t, dayCounter) for t in times]
+        self.discount = discount if callable(discount) else (lambda t, r=float(discount): math.exp(-r * t))
+        self.accrualOnDefault = accrualOnDefault
+        self.maturity = self.times[-1]
+
+    def couponLegNPV(self): return self._result("couponLegNPV")
+    def defaultLegNPV(self): return self._result("defaultLegNPV")
+    def fairSpread(self): return self._result("fairSpread")

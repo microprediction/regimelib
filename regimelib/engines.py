@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite
@@ -88,6 +88,8 @@ class SwitchingEngine:
                 out.update(delta=-B * P, gamma=B * B * P)
         elif isinstance(instrument, ContinuousGeometricAsianOption):
             out = self._geometricAsian(instrument)
+        elif isinstance(instrument, CreditDefaultSwap):
+            out = self._cds(instrument)
         elif isinstance(instrument, VanillaOption):
             out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
         elif isinstance(instrument, CouponBond):
@@ -158,6 +160,22 @@ class SwitchingEngine:
             return call
         bond = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in cashflows)       # parity: C - P = bond - K P(0,T)
         return call - bond + K * self.calculate(ZeroCouponBond(T))
+
+    def _cds(self, cds):
+        """Survival Q(t) is the model's bond price; premium leg = s sum tau_i D(t_i) Q(t_i) (+ accrual to the mid-point
+        on default), protection = (1 - R) sum D(t_mid) (Q(t_{i-1}) - Q(t_i))."""
+        Q = lambda t: 1.0 if t <= 0 else self.calculate(ZeroCouponBond(t))
+        D = cds.discount; prem = prot = 0.0; t0 = 0.0
+        for t1 in cds.times:
+            tau = t1 - t0; tm = 0.5 * (t0 + t1); q0, q1 = Q(t0), Q(t1)
+            prem += cds.spread * tau * D(t1) * q1
+            if cds.accrualOnDefault:
+                prem += cds.spread * 0.5 * tau * D(tm) * (q0 - q1)
+            prot += (1.0 - cds.recovery) * D(tm) * (q0 - q1)
+            t0 = t1
+        sign = 1.0 if cds.isBuyer else -1.0
+        return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
+                "fairSpread": cds.spread * prot / prem}
 
     def _geometricAsian(self, opt):
         """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
