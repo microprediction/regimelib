@@ -28,7 +28,8 @@ def gaussian_factors(kappas, thetas, sigmas, rhos, weights):
     gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
 
     def prefactor(t, xs):
-        return math.exp(-sum(Bs[j].value(t) * xs[j] for j in range(J)))
+        e = -sum(Bs[j].value(t) * xs[j] for j in range(J))
+        return cmath.exp(e) if isinstance(e, complex) else math.exp(e)
     return g, gfuncs, prefactor
 
 

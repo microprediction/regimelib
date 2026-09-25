@@ -11,6 +11,7 @@ from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
 from .g2options import g2_zcb_call
+from .hybrid import SwitchingEquityRates
 
 
 def _gauss(U, n):
@@ -89,6 +90,8 @@ class SwitchingEngine:
                 out.update(delta=-B * P, gamma=B * B * P)
         elif isinstance(instrument, ContinuousGeometricAsianOption):
             out = self._geometricAsian(instrument)
+        elif isinstance(instrument, VanillaOption) and isinstance(m, SwitchingEquityRates):
+            out = self._hybridVanilla(instrument)
         elif isinstance(instrument, CreditDefaultSwap):
             out = self._cds(instrument)
         elif isinstance(instrument, VanillaOption):
@@ -180,6 +183,26 @@ class SwitchingEngine:
         sign = 1.0 if cds.isBuyer else -1.0
         return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
                 "fairSpread": cds.spread * prot / prem}
+
+    def _hybridVanilla(self, opt):
+        """Lewis's formula with the discounted characteristic function (regimelib.hybrid); the put by parity with the
+        switching bond from the same starting regime."""
+        m, T, K = self.model, opt.maturity, opt.strike
+        if opt.payoffType != "vanilla":
+            raise TypeError("digitals are not priced under the hybrid model")
+        def psi(w):
+            g, gfuncs, factor = m.discountedForcing(w, T)
+            return factor * self._aVector(g, gfuncs, T)[0][self.regime]
+        U = 8.0
+        while abs(psi(U - 0.5j)) > 1e-14 * K ** 0.5 and U < 1e4:
+            U *= 2
+        k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(m.S0 / K)))
+        I0 = sum(w * (cmath.exp(-1j * u * k) * psi(u - 0.5j)).real / (u * u + 0.25) for u, w in zip(us, ws))
+        call = m.S0 * math.exp(-m.q * T) - math.sqrt(K) / math.pi * I0
+        if opt.isCall:
+            return {"value": call}
+        bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
+        return {"value": call - m.S0 * math.exp(-m.q * T) + K * bond}
 
     def _geometricAsian(self, opt):
         """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
