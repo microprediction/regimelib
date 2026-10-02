@@ -70,7 +70,7 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
     the model is left at the fitted values."""
     engine = engine or (lambda m: NumericalSwitchingEngine(m))
     x0 = np.concatenate([_get(model, p) for p in parameters]); sizes = [len(_get(model, p)) for p in parameters]
-    lo = np.full(len(x0), 1e-8); hi = np.full(len(x0), np.inf)
+    lo = np.full(len(x0), -np.inf); hi = np.full(len(x0), np.inf)
     if bounds is not None:
         lo, hi = np.asarray(bounds[0], float), np.asarray(bounds[1], float)
 
