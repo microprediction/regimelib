@@ -87,12 +87,51 @@ class SwitchingFDEngine:
         belief as a state variable (two regimes, Vasicek or CIR rate options)."""
         rate = isinstance(instrument, (Swaption, CouponBondOption, ZeroCouponBondOption, CapFloor))
         acts = rate or getattr(instrument, "isAmerican", False)
+        exact = self._withoutAGrid(instrument, rate)                     # deterministic models, and G2 with one live factor
+        if exact is not None:
+            return exact if results else exact["value"]
         if acts and self.information == "inferred" and not regimeIsKnown(self.model):
             if not rate:
                 raise notRevealed("early exercise")
             out = self._inferredRateOption(instrument)
             return out if results else out["value"]
         return self._byRegime(instrument, results)
+
+    def _withoutAGrid(self, instrument, rate):
+        """A model with no diffusion has a known path, and a grid in a state that does not move has no width. Price
+        those directly. A G2 model with one factor's volatility identically zero is the one-factor Hull-White model
+        in the other factor, and is solved as such."""
+        from .engines import NumericalSwitchingEngine, _noDiffusion, deterministicEquity
+        from .models import SwitchingG2, SwitchingHullWhite
+        from .hybrid import SwitchingEquityRates
+        from .instruments import ZeroCouponBond
+        m = self.model
+        start = self.regime if self.belief is None else list(self.belief)
+        if _noDiffusion(m) == "deterministic":
+            if rate:
+                reduced = NumericalSwitchingEngine(m, regime=start, information="observed")
+                bond = lambda t: 1.0 if t == 0 else reduced.calculate(ZeroCouponBond(t))
+                if isinstance(instrument, Swaption) and instrument.exerciseTimes:      # exercise on the best of the known dates
+                    call, K = not instrument.isPayer, instrument.notional
+                    values = []
+                    for t in instrument.exerciseTimes:
+                        swap = sum(c * bond(S) for S, c in instrument.cashflows if S > t + 1e-12) - K * bond(t)
+                        values.append(max(swap if call else -swap, 0.0))
+                    return {"value": max(values)}
+                return {"value": reduced.calculate(instrument)}
+            if isinstance(instrument, VanillaOption) and not isinstance(m, SwitchingEquityRates):
+                rejectFeatures(instrument, "the switching finite-difference engine", ("geometric averaging",),
+                               "NumericalSwitchingEngine or FastSwitchingEngine")
+                return {"value": deterministicEquity(m, instrument)}
+        if rate and isinstance(m, SwitchingG2):
+            for speed, vols, dead in ((m.a, m.sigma, m.eta), (m.b, m.eta, m.sigma)):
+                if all(v == 0.0 for v in dead) and any(v != 0.0 for v in vols):
+                    one = SwitchingHullWhite(m.chain, m.discount, speed, vols)
+                    n = self.n[0] if isinstance(self.n, tuple) else self.n
+                    width = self.width[0] if isinstance(self.width, tuple) else self.width
+                    engine = SwitchingFDEngine(one, regime=start, n=n, steps=self.steps, width=width, information=self.information)
+                    return engine.calculate(instrument, results=True)
+        return None
 
     @byBelief()
     def _byRegime(self, instrument, results=False):

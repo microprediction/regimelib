@@ -45,6 +45,15 @@ def loading(kappa, c=0.0, T=None):
     return ExpSum({0: 1 / kappa, kappa: c - 1 / kappa}), f
 
 
+def loadings(specs, T):
+    """`loading` for several (kappa, c) at once, in one representation so that they can be multiplied: Chebyshev
+    series for all of them if kappa T is small for any, exponential sums otherwise."""
+    fs = [(lambda k, c: (lambda t: stable_B(k, t, c)))(k, c) for k, c in specs]
+    if any(abs(k) * T < SMALL_SPEED for k, _ in specs):
+        return [(Cheb.fit(f, T, 24), f) for f in fs]
+    return [(ExpSum({0: 1 / k, k: c - 1 / k}), f) for (k, c), f in zip(specs, fs)]
+
+
 # ---------------------------------------------------------------- Gaussian factors (sums of exponentials)
 def gaussian_factors(kappas, thetas, sigmas, rhos, weights, T=None):
     """Factors dx_j = kappa_j (theta_j[y] - x_j) dt + sigma_j[y] dW_j, corr(dW_j, dW_l) = rhos[y][j][l].
@@ -114,7 +123,8 @@ def vasicek_jumps(kappa, thetas, sigmas, intensities, jump_mean, T):
     B = lambda t: stable_B(kappa, t)
 
     def gf(th, s, l):
-        return lambda t: -kappa * th * B(t) + 0.5 * s * s * B(t) ** 2 + l * (1 / (1 + jump_mean * B(t)) - 1)
+        # the jump term is l (1 / (1 + m B) - 1) = -(l m) B / (1 + m B): the second form keeps l m when m B is tiny
+        return lambda t: -kappa * th * B(t) + 0.5 * s * s * B(t) ** 2 - (l * jump_mean) * B(t) / (1 + jump_mean * B(t))
     gfuncs = [gf(thetas[i], sigmas[i], intensities[i]) for i in range(len(thetas))]
     g = [Cheb.fit(f, T, 80) for f in gfuncs]
     return g, gfuncs, (lambda t, x: math.exp(-B(t) * x))

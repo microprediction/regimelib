@@ -58,6 +58,8 @@ class Grid1D:
     around `center` by the sinh map of Tavella and Randall (`stretch` is the width of the dense region as a
     fraction of the interval; smaller is denser). Three-point stencils on the non-uniform spacing."""
     def __init__(self, lo, hi, n, center=None, stretch=None):
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            raise ValueError(f"a grid needs a finite interval with hi > lo; got [{lo}, {hi}]")
         if center is None or stretch is None:
             self.x = np.linspace(lo, hi, n)
         else:
@@ -121,6 +123,11 @@ class FirstOrderFDEngine:
             raise TypeError("the first-order finite-difference engine prices vanilla options")
         rejectFeatures(instrument, "the first-order finite-difference engine", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
+        from .engines import _noDiffusion, deterministicEquity
+        if _noDiffusion(m) == "deterministic":                           # no grid to build: the terminal price is known
+            self.averaged, self.correction, self.memory = deterministicEquity(m, instrument), 0.0, 0.0
+            self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=0.0, memoryRelative=0.0, estimatedError=0.0)
+            return self.averaged
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         K, M = green_kubo(m.chain, f)
         C = sum(K[j, k] * (As[j] @ As[k]) for j in range(len(As)) for k in range(len(As)))
@@ -155,6 +162,9 @@ class SwitchingFDReferee:
             raise TypeError("the switching finite-difference referee prices vanilla options")
         rejectFeatures(instrument, "the switching finite-difference referee", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
+        from .engines import _noDiffusion, deterministicEquity
+        if _noDiffusion(m) == "deterministic":
+            return deterministicEquity(m, instrument)
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         f = np.atleast_2d(np.asarray(f, float)); pi = m.chain.stationaryDistribution(); nR = m.n
         blocks = [[None] * nR for _ in range(nR)]

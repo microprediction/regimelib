@@ -350,13 +350,14 @@ class SwitchingG2(SwitchingModel):
 
     def bondForcing(self, T):
         a, b = self.a, self.b; pi = self.chain.stationaryDistribution()
-        Bx, By = ExpSum({0: 1 / a, a: -1 / a}), ExpSum({0: 1 / b, b: -1 / b})
-        g, cov_bar = [], ExpSum()
+        (Bx, fx), (By, fy) = _m.loadings([(a, 0.0), (b, 0.0)], T)       # Chebyshev series when a T or b T is small
+        g, cov_bar = [], None
         for i in range(self.n):
             s, e, r = self.sigma[i], self.eta[i], self.rho[i]
             gi = (Bx * Bx).scale(0.5 * s * s) + (By * By).scale(0.5 * e * e) + (Bx * By).scale(r * s * e)
-            g.append(gi); cov_bar = cov_bar + gi.scale(pi[i])
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+            g.append(gi); cov_bar = gi.scale(pi[i]) if cov_bar is None else cov_bar + gi.scale(pi[i])
+        gfuncs = [(lambda s, e, r: (lambda t: 0.5 * s * s * fx(t) ** 2 + 0.5 * e * e * fy(t) ** 2 + r * s * e * fx(t) * fy(t)))(
+            self.sigma[i], self.eta[i], self.rho[i]) for i in range(self.n)]
         # phi absorbs the averaged variance term so that the averaged model reproduces the curve: P = D(t) e^{-int cov_bar} a
         pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
         return g, gfuncs, pre
@@ -377,8 +378,8 @@ class SwitchingG2(SwitchingModel):
         nx, ny = (n, n) if np.isscalar(n) else n
         if width is None:                                                  # six standard deviations at the last exercise
             Tend = max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
-            sdx = math.sqrt(max(sig ** 2) * (1 - math.exp(-2 * self.a * Tend)) / (2 * self.a))
-            sdy = math.sqrt(max(eta ** 2) * (1 - math.exp(-2 * self.b * Tend)) / (2 * self.b))
+            sdx = math.sqrt(max(sig ** 2) * _m.ou_variance(self.a, Tend))
+            sdy = math.sqrt(max(eta ** 2) * _m.ou_variance(self.b, Tend))
             Lx, Ly = 6 * sdx, 6 * sdy
         else:
             Lx, Ly = (width, width) if np.isscalar(width) else width
@@ -395,9 +396,9 @@ class SwitchingG2(SwitchingModel):
         tau = S - t
         if tau <= 0:
             return np.ones((self.n, grid.n))
-        g, gf = _g2_forcing(self.a, self.b, self.sigma, self.eta, self.rho, 0.0, 0.0)
+        g, gf = _g2_forcing(self.a, self.b, self.sigma, self.eta, self.rho, 0.0, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gf, tau).real
-        Ba, Bb = (1 - math.exp(-self.a * tau)) / self.a, (1 - math.exp(-self.b * tau)) / self.b
+        Ba, Bb = _m.stable_B(self.a, tau), _m.stable_B(self.b, tau)
         return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Ba * grid.X - Bb * grid.V)[None, :]
 
 
