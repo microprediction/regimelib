@@ -1,0 +1,106 @@
+G2++
+====
+
+``rl.SwitchingG2(chain, termStructure, a, sigma, b, eta, rho)`` is QuantLib's ``G2(termStructure, a, sigma, b, eta,
+rho)`` with both volatilities and the correlation allowed to switch.
+
+The model
+---------
+
+.. math::
+
+    r_t = x_t + z_t + \varphi(t), \qquad dx_t = -a\,x_t\,dt + \sigma_{y_t}\,dW^1_t, \qquad
+    dz_t = -b\,z_t\,dt + \eta_{y_t}\,dW^2_t, \qquad d\langle W^1, W^2\rangle = \rho_{y_t}\,dt,
+
+with :math:`x_0 = z_0 = 0` and :math:`\varphi` fitted to the market curve.
+
+Reduction
+---------
+
+Try :math:`u_i = e^{-B_a(t)x - B_b(t)z}a_i(t)` in the pricing equation for :math:`\mathbb{E}[e^{-\int(x + z)}]`. The
+terms in :math:`x` and in :math:`z` cancel separately when :math:`B_a' = 1 - aB_a` and :math:`B_b' = 1 - bB_b`, and
+
+.. math::
+
+    g_i(t) = \tfrac12\sigma_i^2\,B_a^2 + \tfrac12\eta_i^2\,B_b^2 + \rho_i\sigma_i\eta_i\,B_aB_b, \qquad
+    B_a = \frac{1 - e^{-at}}{a}, \quad B_b = \frac{1 - e^{-bt}}{b},
+
+half the variance rate of :math:`\int r` in regime :math:`i`. As for :doc:`hull_white`, the shift is fitted with
+the averaged covariance and cancels the averaged part:
+:math:`P_i(0, T) = P^M(0, T)\,e^{-\int\bar g}\,a_i(T)`.
+
+Closed form
+-----------
+
+The switched quantities are the two variances and the covariance. With half-differences
+
+.. math::
+
+    \tilde s = \tfrac12(\sigma_1^2 - \sigma_2^2), \qquad \tilde h = \tfrac12(\eta_1^2 - \eta_2^2), \qquad
+    \tilde c = \tfrac12(\rho_1\sigma_1\eta_1 - \rho_2\sigma_2\eta_2),
+
+the square of :math:`\tilde g` is a quartic in :math:`B_a` and :math:`B_b`, which needs the integrals
+
+.. math::
+
+    M_{pq} = \int_0^TB_a^p\,B_b^q\,dt = \frac{1}{a^p\,b^q}\sum_{j=0}^{p}\sum_{k=0}^{q}(-1)^{j+k}\binom pj\binom qk\,\Phi(ja + kb),
+    \qquad \Phi(0) = T, \quad \Phi(\kappa) = \frac{1 - e^{-\kappa T}}{\kappa}.
+
+Then
+
+.. math::
+
+    \int_0^T\tilde g^{\,2} = \tfrac14\tilde s^2M_{40} + \tfrac14\tilde h^2M_{04} + \big(\tilde c^2 + \tfrac12\tilde s\tilde h\big)M_{22}
+      + \tilde s\,\tilde c\,M_{31} + \tilde h\,\tilde c\,M_{13},
+
+.. math::
+
+    \tilde g(T) = \tfrac12\tilde s\,B_a^2 + \tfrac12\tilde h\,B_b^2 + \tilde c\,B_aB_b, \qquad \tilde g(0) = 0, \qquad
+    \tilde g'(T) = \tilde s\,B_aE_a + \tilde h\,B_bE_b + \tilde c\,(E_aB_b + B_aE_b),
+
+with :math:`E_a = e^{-aT}`, :math:`E_b = e^{-bT}`, and the bond relative to the market is the common formula with
+:math:`\int\bar g` removed.
+
+Python
+------
+
+.. code-block:: python
+
+    from math import comb
+    a, b, sigma, eta, rho, flat, lam, T = 0.5, 0.1, [0.015, 0.006], [0.012, 0.008], [-0.4, -0.7], 0.03, 5.0, 5.0
+
+    def M(p, q):
+        Phi = lambda kappa: T if kappa == 0 else (1 - np.exp(-kappa * T)) / kappa
+        return sum((-1) ** (j + k) * comb(p, j) * comb(q, k) * Phi(j * a + k * b)
+                   for j in range(p + 1) for k in range(q + 1)) / (a ** p * b ** q)
+
+    Ea, Eb = np.exp(-a * T), np.exp(-b * T)
+    Ba, Bb = (1 - Ea) / a, (1 - Eb) / b
+    _, st = half([s * s for s in sigma])
+    _, ht = half([e * e for e in eta])
+    _, ct = half([rho[i] * sigma[i] * eta[i] for i in range(2)])
+    ratio = second_order(
+        int_gbar=0.0,
+        int_gt2=(st * st * M(4, 0) / 4 + ht * ht * M(0, 4) / 4 + (ct * ct + st * ht / 2) * M(2, 2)
+                 + st * ct * M(3, 1) + ht * ct * M(1, 3)),
+        gt_T=st * Ba * Ba / 2 + ht * Bb * Bb / 2 + ct * Ba * Bb,
+        gt_0=0.0,
+        dgt_T=st * Ba * Ea + ht * Bb * Eb + ct * (Ea * Bb + Ba * Eb),
+        lam=lam)
+
+    model = rl.SwitchingG2(rl.RegimeChain.twoState(lam, lam), flat, a, sigma, b, eta, rho)
+    print(f"closed form, second order  {ratio:.10f}")
+    print(f"library, numerical         {library_bond(model, T) / np.exp(-flat * T):.10f}")
+
+
+.. code-block:: text
+
+    closed form, second order  1.0000322126
+    library, numerical         1.0000322147
+
+Instruments
+-----------
+
+Bonds, options on bonds and caps by the characteristic-function engines, where a zero-coupon bond depends on the
+factors through the single Gaussian variable :math:`B_ax_T + B_bz_T`; swaptions and Bermudans on the two-factor
+grid.

@@ -33,6 +33,12 @@ referee.
 
 .. toctree::
    :maxdepth: 2
+   :caption: Models: mathematics and Python
+
+   models/index
+
+.. toctree::
+   :maxdepth: 2
    :caption: Reference
 
    reference/basics
