@@ -61,6 +61,8 @@ class MonteCarloSwitchingEngine:
             sign = 1.0 if instrument.isCall else -1.0
             for states, durs in self._paths(T):
                 v = float(np.sum(np.asarray(m.sigma)[states] ** 2 * durs))      # integrated variance given the path
+                if v == 0.0:                                                    # the path never left a zero-volatility regime
+                    vals.append(disc * float(instrument.payoffOnGrid([F])[0])); continue
                 sv = math.sqrt(v); d1 = (math.log(F / K) + 0.5 * v) / sv; d2 = d1 - sv
                 if instrument.payoffType == "cash":                             # pays the cash amount beyond the strike
                     vals.append(disc * instrument.cash * _N(sign * d2))

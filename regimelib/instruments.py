@@ -80,10 +80,20 @@ class Instrument:
         target = self.NPV() if price is None else price
         N = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
         def black(v):
-            sv = v * math.sqrt(T); d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
+            sv = v * math.sqrt(T)
+            if sv == 0.0:                                                # intrinsic on the forward
+                return disc * max(F - K, 0.0) if self.isCall else disc * max(K - F, 0.0)
+            d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
             c = disc * (F * N(d1) - K * N(d2))
             return c if self.isCall else c - disc * (F - K)
-        return brentq(lambda v: black(v) - target, minVol, maxVol, xtol=accuracy, maxiter=maxEvaluations)
+        floor, cap = black(0.0), black(maxVol)
+        slack = 1e-12 * max(1.0, abs(target))
+        if target < floor - slack or target > cap + slack:
+            raise ValueError(f"the price {target} is outside the Black range [{floor}, {cap}] for volatilities up to {maxVol}")
+        if target <= floor + slack:
+            return 0.0                                                   # the deterministic limit
+        lo = 0.0 if black(minVol) > target else minVol                   # the answer may lie below the default lower end
+        return brentq(lambda v: black(v) - target, lo, maxVol, xtol=accuracy, maxiter=maxEvaluations)
 
     def delta(self): return self._result("delta")
     def gamma(self): return self._result("gamma")
