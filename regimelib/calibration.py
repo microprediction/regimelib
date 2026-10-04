@@ -26,8 +26,10 @@ class VolatilityHelper:
         if sv == 0.0:                                                    # no time or no volatility: intrinsic on the forward
             return disc * max(F - K, 0.0) if self.option.isCall else disc * max(K - F, 0.0)
         N = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
-        d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; c = disc * (F * N(d1) - K * N(d1 - sv))
-        return c if self.option.isCall else c - disc * (F - K)
+        d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
+        if self.option.isCall:
+            return disc * (F * N(d1) - K * N(d2))
+        return disc * (K * N(-d2) - F * N(-d1))                          # directly: parity would cancel a small put
 
     def marketValue(self):
         return self._black(self.volatility)

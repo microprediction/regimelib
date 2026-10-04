@@ -163,6 +163,9 @@ class SwitchingFDEngine:
         x0 = math.log(m.S0) if logGrid else m.S0
         if (opt.isUp and x0 >= b) or (not opt.isUp and x0 <= b):
             raise ValueError("the spot is beyond the barrier")
+        if opt.isAmerican and not opt.isKnockOut:
+            raise NotImplementedError("an American knock-in is not priced: vanilla less knock-out is a European identity. "
+                                      "Price the knock-out, or the European knock-in.")
         # the vanilla on the default grid, and the knock-out on a grid truncated at the barrier node
         Big, grid, u0, _, nR = self._system(opt, self.width)
         L = (grid.x[-1] - grid.x[0]) / 2
@@ -170,18 +173,21 @@ class SwitchingFDEngine:
         BigB, gridB, u0B, _, _ = self._system(opt, ends)
         bnode = 0 if not opt.isUp else gridB.n - 1
         idx = np.array([r * gridB.n + bnode for r in range(nR)])
-        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, opt.rebate))
+        # a knock-out pays its rebate at the hit; a knock-in is the vanilla less the knock-out with no rebate, plus its
+        # own rebate, paid at expiry if the barrier was never touched
+        atHit = opt.rebate if opt.isKnockOut else 0.0
+        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, atHit))
         res = self._greeks(gridB, vOut, x0, BigB, nR)
         if opt.isKnockOut:
             return res
         vVan = self._march(Big, np.tile(u0, nR), T)
         van = self._greeks(grid, vVan, x0, Big, nR)
-        # rebate at expiry if never knocked in: solve for the survival value with a unit terminal payoff and zero at the barrier
-        reb = 0.0
-        if opt.rebate:
+        out = {k: van[k] - res[k] for k in van}
+        if opt.rebate:                                                   # the discounted probability of never hitting
             vS = self._march(BigB, np.ones(nR * gridB.n), T, fixed=(idx, 0.0))
-            reb = opt.rebate * gridB.interp(vS[self.regime * gridB.n:(self.regime + 1) * gridB.n], x0)
-        return {k: van[k] - res[k] + (reb if k == "value" else 0.0) for k in van}
+            never = self._greeks(gridB, vS, x0, BigB, nR)
+            out = {k: out[k] + opt.rebate * never[k] for k in out}
+        return out
 
     # -- options on coupon bonds and swaps, European or Bermudan, on a short-rate grid ----------------------------
     def _rateOption(self, inst):

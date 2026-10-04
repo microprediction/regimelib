@@ -75,3 +75,35 @@ def test_switching_barrier_matches_monte_carlo():
         reg = np.where(rng.random(N) < -np.diag(Q)[reg] * dt, 1 - reg, reg)
     pay = np.where(alive, np.maximum(100.0 - S, 0.0), 0.0) * math.exp(-0.03)
     assert abs(fd - pay.mean()) < 3 * pay.std() / math.sqrt(N) + 2e-3
+
+
+@pytest.mark.parametrize("btype, barrier", [(ql.Barrier.DownIn, 85.0), (ql.Barrier.UpIn, 130.0),
+                                            (ql.Barrier.DownOut, 85.0), (ql.Barrier.UpOut, 130.0)])
+def test_barrier_rebates_match_analytic_engine(btype, barrier):
+    """A knock-out pays its rebate at the hit, a knock-in at expiry if never hit; the knock-in is the vanilla less
+    the knock-out without rebate."""
+    S0, r, q, sigma, K, rebate = 100.0, 0.05, 0.02, 0.25, 100.0, 5.0
+    proc = _ql_process(S0, r, q, sigma); expiry = REF + ql.Period(365, ql.Days)
+    payoff, ex = ql.PlainVanillaPayoff(ql.Option.Call, K), ql.EuropeanExercise(expiry)
+    model = rl.SwitchingBlackScholesProcess(CHAIN, S0, r, q, sigma)
+    engine = rl.SwitchingFDEngine(model, n=2001, steps=800)
+    values = {}
+    for R in (0.0, rebate, 2 * rebate):
+        o = ql.BarrierOption(btype, barrier, R, payoff, ex); o.setPricingEngine(ql.AnalyticBarrierEngine(proc))
+        ours = rl.BarrierOption(btype, barrier, R, payoff, ex); ours.setPricingEngine(engine)
+        assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-3)
+        values[R] = (ours.NPV(), ours.delta())
+    for k in (0, 1):                                                            # value and delta are linear in the rebate
+        assert values[2 * rebate][k] - values[rebate][k] == pytest.approx(values[rebate][k] - values[0.0][k], rel=1e-9, abs=1e-12)
+    assert values[rebate][1] != values[0.0][1]                                  # the rebate has a delta
+
+
+def test_american_knock_in_is_refused():
+    model = rl.SwitchingBlackScholesProcess(CHAIN, 100.0, 0.05, 0.0, [0.3, 0.15])
+    option = rl.BarrierOption("downin", 80.0, 0.0, ("put", 100.0), exercise="american", maturity=1.0)
+    option.setPricingEngine(rl.SwitchingFDEngine(model, n=201, steps=50))
+    with pytest.raises(NotImplementedError, match="knock-in"):
+        option.NPV()
+    knock_out = rl.BarrierOption("downout", 80.0, 0.0, ("put", 100.0), exercise="american", maturity=1.0)
+    knock_out.setPricingEngine(rl.SwitchingFDEngine(model, n=201, steps=50))
+    assert knock_out.NPV() > 0

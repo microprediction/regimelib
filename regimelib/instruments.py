@@ -84,14 +84,15 @@ class Instrument:
             if sv == 0.0:                                                # intrinsic on the forward
                 return disc * max(F - K, 0.0) if self.isCall else disc * max(K - F, 0.0)
             d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
-            c = disc * (F * N(d1) - K * N(d2))
-            return c if self.isCall else c - disc * (F - K)
+            if self.isCall:
+                return disc * (F * N(d1) - K * N(d2))
+            return disc * (K * N(-d2) - F * N(-d1))                      # directly: parity would cancel a small put
         floor, cap = black(0.0), black(maxVol)
         slack = 1e-12 * max(1.0, abs(target))
         if target < floor - slack or target > cap + slack:
             raise ValueError(f"the price {target} is outside the Black range [{floor}, {cap}] for volatilities up to {maxVol}")
-        if target <= floor + slack:
-            return 0.0                                                   # the deterministic limit
+        if target <= floor * (1.0 + 1e-12):                              # relative to the intrinsic value: a small price
+            return 0.0                                                   # above a zero floor is a small volatility, not none
         lo = 0.0 if black(minVol) > target else minVol                   # the answer may lie below the default lower end
         return brentq(lambda v: black(v) - target, lo, maxVol, xtol=accuracy, maxiter=maxEvaluations)
 
