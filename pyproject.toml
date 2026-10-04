@@ -23,7 +23,7 @@ Documentation = "https://regimelib.org"
 Source = "https://github.com/microprediction/regimelib"
 Issues = "https://github.com/microprediction/regimelib/issues"
 [project.optional-dependencies]
-test = ["pytest", "QuantLib"]
+test = ["pytest", "pytest-xdist", "QuantLib"]
 docs = ["sphinx", "sphinx-rtd-theme"]
 [build-system]
 requires = ["setuptools>=61"]

@@ -1,5 +1,8 @@
 name: tests
-on: [push, pull_request]
+on:
+  push:
+    branches: [main]
+  pull_request:
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -7,6 +10,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with: {python-version: "3.12"}
-      - run: pip install -e . pytest QuantLib
-      - run: python -m pytest -q tests
-        timeout-minutes: 30
+      - run: pip install -e . pytest pytest-xdist QuantLib
+      - run: python -m pytest -q -n auto tests
+        timeout-minutes: 45
