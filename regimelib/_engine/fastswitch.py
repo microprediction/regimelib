@@ -349,23 +349,23 @@ def numerical_a(t, Q, g, dps=30, a0=None, mp_values=False):
     """a(t) for a' = (Q + diag g(t)) a, a(0) = a0 (default 1), by mpmath's Taylor-series ODE solver at dps digits.
     Returned as Python floats or complex numbers, or as mpmath numbers at full precision when mp_values is set."""
     import mpmath as mp
-    mp.mp.dps = dps
-    Qm = mp.matrix(np.asarray(Q, float).tolist())
-    n = Qm.rows
-    terms = [[(mp.mpf(a), mp.mpc(complex(c))) for a, c in gi.t.items()] for gi in g]
+    with mp.workdps(dps):                                     # the caller's precision is restored on the way out
+        Qm = mp.matrix(np.asarray(Q, float).tolist())
+        n = Qm.rows
+        terms = [[(mp.mpf(a), mp.mpc(complex(c))) for a, c in gi.t.items()] for gi in g]
 
-    def f(r, a):
-        out = []
-        for i in range(n):
-            gi = sum(c * mp.e ** (-al * r) for al, c in terms[i])
-            out.append(gi * a[i] + sum(Qm[i, j] * a[j] for j in range(n)))
-        return out
-    start = [1] * n if a0 is None else [mp.mpc(complex(v)) for v in a0]
-    vals = mp.odefun(f, 0, start)(mp.mpf(t))
-    if mp_values:
-        return vals if any(mp.im(v) for v in vals) else [mp.re(v) for v in vals]
-    out = [complex(v) for v in vals]
-    return out if any(v.imag for v in out) else [v.real for v in out]
+        def f(r, a):
+            out = []
+            for i in range(n):
+                gi = sum(c * mp.e ** (-al * r) for al, c in terms[i])
+                out.append(gi * a[i] + sum(Qm[i, j] * a[j] for j in range(n)))
+            return out
+        start = [1] * n if a0 is None else [mp.mpc(complex(v)) for v in a0]
+        vals = mp.odefun(f, 0, start)(mp.mpf(t))
+        if mp_values:
+            return vals if any(mp.im(v) for v in vals) else [mp.re(v) for v in vals]
+        out = [complex(v) for v in vals]
+        return out if any(v.imag for v in out) else [v.real for v in out]
 
 
 # ------------------------------------------------------------------ smooth functions that are not exponential sums

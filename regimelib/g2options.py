@@ -12,7 +12,7 @@ from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable
 from ._engine.models import loadings, stable_B, ou_variance
 
 
-def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T):
+def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T=None):
     """Forcing per regime for terminal coefficients cx, cy (complex allowed) on [0, T]: exponential sums, or
     Chebyshev series when a reversion speed is small or zero; the callables evaluate the loadings stably."""
     (Dx, fx), (Dy, fy) = loadings([(a, cx), (b, cy)], T)

@@ -32,7 +32,20 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
     xstar = []
     for j in range(m):
         f = lambda x, j=j: sum(c * A[k][j] * math.exp(-bs[k] * x) for k, (S, c) in enumerate(cashflows)) - K
-        lo, hi = mean_xT - 60 * math.sqrt(var) - 1.0, mean_xT + 60 * math.sqrt(var) + 1.0
+        # f is continuous and strictly decreasing from +inf to -K, so the root exists: widen until the signs differ
+        half = 60 * math.sqrt(var) + 1.0
+        lo, hi = mean_xT - half, mean_xT + half
+        for _ in range(200):
+            flo, fhi = f(lo), f(hi)
+            if flo > 0 >= fhi:
+                break
+            if flo <= 0:
+                lo -= half
+            if fhi > 0:
+                hi += half
+            half *= 2
+        else:
+            raise ArithmeticError("no exercise boundary found for the coupon-bond option")
         xstar.append(brentq(f, lo, hi))
     cases = []
     for j in range(m):

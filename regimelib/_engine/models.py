@@ -49,7 +49,7 @@ def loadings(specs, T):
     """`loading` for several (kappa, c) at once, in one representation so that they can be multiplied: Chebyshev
     series for all of them if kappa T is small for any, exponential sums otherwise."""
     fs = [(lambda k, c: (lambda t: stable_B(k, t, c)))(k, c) for k, c in specs]
-    if any(abs(k) * T < SMALL_SPEED for k, _ in specs):
+    if T is not None and any(abs(k) * T < SMALL_SPEED for k, _ in specs):
         return [(Cheb.fit(f, T, 24), f) for f in fs]
     return [(ExpSum({0: 1 / k, k: c - 1 / k}), f) for (k, c), f in zip(specs, fs)]
 

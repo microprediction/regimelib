@@ -181,7 +181,7 @@ class TwoStateConstantForcing:
         a(T) = [e^{mu+ T} (M - mu- I) - e^{mu- T} (M - mu+ I)] 1 / (mu+ - mu-).
 
     `a(regime)` is that formula as a sympy expression in q12, q21, g1, g2, T; the characteristic function of a
-    switching Black-Scholes log return is `blackScholes(regime)` with g_i = -u^2 sigma_i^2 / 2 for the martingale
+    switching Black-Scholes log return is `blackScholes(regime)` with g_i = -u (u + i) sigma_i^2 / 2 for the martingale
     return and u kept symbolic, so that d/du under Lewis's integral gives the greeks in closed form."""
     q12, q21, g1, g2, T, u, s1, s2 = sp.symbols("q12 q21 g1 g2 T u sigma1 sigma2")
     symbols = dict(q12=q12, q21=q21, g1=g1, g2=g2, T=T)

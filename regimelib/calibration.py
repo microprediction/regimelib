@@ -66,8 +66,9 @@ def _set(model, name, values):
                     Q[i, j] = values[k]; k += 1
             Q[i, i] = -Q[i].sum()
         model.chain = RegimeChain(Q)
-    else:
-        setattr(model, name, values if len(values) > 1 else float(values[0]))
+    else:                                                    # a scalar stays a scalar, a per-regime list stays a list (a copy)
+        scalar = np.isscalar(getattr(model, name))
+        setattr(model, name, float(values[0]) if scalar else [float(v) for v in values])
 
 
 def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilityError=False, **kwargs):
@@ -76,6 +77,14 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
     numerical engine, whose terminal vectors are shared across strikes at each maturity). Returns the scipy result;
     the model is left at the fitted values."""
     engine = engine or (lambda m: NumericalSwitchingEngine(m))
+    helpers, parameters = tuple(helpers), tuple(parameters)    # read once: either may be a generator
+    if not helpers:
+        raise ValueError("calibration requires at least one helper")
+    if not parameters:
+        raise ValueError("calibration requires at least one parameter")
+    repeated = sorted({p for p in parameters if parameters.count(p) > 1})
+    if repeated:
+        raise ValueError(f"each parameter may be named once; repeated: {', '.join(repeated)}")
     x0 = np.concatenate([_get(model, p) for p in parameters]); sizes = [len(_get(model, p)) for p in parameters]
     lo = np.full(len(x0), 1e-8); hi = np.full(len(x0), np.inf)
     if bounds is not None:

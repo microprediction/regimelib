@@ -179,11 +179,9 @@ class SwitchingEngine:
         elif isinstance(instrument, VanillaOption):
             out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
         elif isinstance(instrument, CouponBond):
-            out = {"value": 0.0, "delta": 0.0, "gamma": 0.0}
-            for t, c in instrument.cashflows:
-                r = self.calculate(ZeroCouponBond(t), results=True)
-                for key in out:
-                    out[key] += c * r.get(key, math.nan)
+            parts = [(c, self.calculate(ZeroCouponBond(t), results=True)) for t, c in instrument.cashflows]
+            keys = set.intersection(*(set(r) for _, r in parts))          # only what every zero-coupon bond provides
+            out = {key: sum(c * r[key] for c, r in parts) for key in ("value", "delta", "gamma") if key in keys}
         elif isinstance(instrument, ZeroCouponBondOption):
             out = {"value": self._bondOption(instrument)}
         elif isinstance(instrument, CouponBondOption):

@@ -48,7 +48,8 @@ class SwitchingFDEngine:
             keep = np.ones(N); keep[idx] = 0.0
             Big = sp.diags(keep) @ Big                                  # Dirichlet rows: u stays at its value
             u = u.copy(); u[idx] = val
-        half = splu((I - 0.5 * dt * Big).tocsc()); full_l = splu((I - 0.5 * dt * Big).tocsc()); full_r = I + 0.5 * dt * Big
+        half = full_l = splu((I - 0.5 * dt * Big).tocsc())               # the implicit half step and Crank-Nicolson share it
+        full_r = I + 0.5 * dt * Big
         for k in range(self.steps):
             if k < 2:                                                    # two implicit Euler half steps
                 u = half.solve(u); u = half.solve(u)

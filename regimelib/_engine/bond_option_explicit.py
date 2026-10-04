@@ -134,7 +134,7 @@ def call(kappa, th, sig, x0, T, S, K, lam, start=0, order=1):
 
 
 if __name__ == '__main__':
-    from options import zcb_call
+    from .options import zcb_call
     kappa, th, sig, x0, T, S = 0.5, [0.05, 0.03], [0.015, 0.010], 0.04, 1.0, 4.0
     for lam in (10.0, 20.0, 40.0):
         Q = lam * np.array([[-1.0, 1.0], [1.0, -1.0]])
