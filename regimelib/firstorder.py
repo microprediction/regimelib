@@ -13,7 +13,7 @@ from scipy.sparse.linalg import expm_multiply
 from .instruments import VanillaOption, rejectFeatures
 
 _PATH_FEATURES = ("American exercise", "a barrier", "geometric averaging")
-from .chain import stateIndex
+from .information import startingBelief, byBelief
 
 
 def green_kubo(chain, f):
@@ -110,10 +110,12 @@ class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""
     def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03, stretch=None):
-        self.model, self.regime, self.n, self.width, self.stretch = model, stateIndex(regime, model.n), n, width, stretch
+        self.model, self.n, self.width, self.stretch = model, n, width, stretch
+        self.regime, self.belief = startingBelief(regime, model.n)
         self.averaged = self.correction = self.memory = None
         self.warnAbove = warnAbove; self.diagnostics = {}
 
+    @byBelief(mean=("averaged", "correction", "memory"))
     def calculate(self, instrument):
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the first-order finite-difference engine prices vanilla options")
@@ -144,8 +146,10 @@ class FirstOrderFDEngine:
 class SwitchingFDReferee:
     """The switching model solved without expansion on the same grid: u_i' = L_i u_i + sum_j Q_ij u_j."""
     def __init__(self, model, regime=0, n=801, width=None, stretch=None):
-        self.model, self.regime, self.n, self.width, self.stretch = model, stateIndex(regime, model.n), n, width, stretch
+        self.model, self.n, self.width, self.stretch = model, n, width, stretch
+        self.regime, self.belief = startingBelief(regime, model.n)
 
+    @byBelief()
     def calculate(self, instrument):
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the switching finite-difference referee prices vanilla options")

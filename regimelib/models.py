@@ -47,6 +47,8 @@ class SwitchingModel:
 # ---------------------------------------------------------------- short-rate models: zero-coupon bonds
 class SwitchingVasicek(SwitchingModel):
     """QuantLib Vasicek(r0, a, b, sigma): dr = a (b - r) dt + sigma dW. b and sigma may switch."""
+    _diffusion, _switching = ("sigma",), ("b", "sigma")          # see regimelib.information
+
     def __init__(self, chain, r0, a, b, sigma):
         super().__init__(chain)
         self.r0, self.a = float(r0), float(a)
@@ -111,6 +113,8 @@ class SwitchingVasicekJumps(SwitchingModel):
 
 class SwitchingCoxIngersollRoss(SwitchingModel):
     """QuantLib CoxIngersollRoss(r0, theta, k, sigma): dr = k (theta - r) dt + sigma sqrt(r) dW. theta may switch."""
+    _diffusion, _switching = (), ("theta",)          # see regimelib.information
+
     def __init__(self, chain, r0, theta, k, sigma):
         super().__init__(chain)
         self.r0, self.k, self.sigma = float(r0), float(k), float(sigma)
@@ -153,6 +157,8 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
 # ---------------------------------------------------------------- equity models: characteristic functions
 class SwitchingBlackScholesProcess(SwitchingModel):
     """QuantLib BlackScholesMertonProcess with a constant rate r, dividend yield q and volatility sigma; sigma may switch."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, S0, r, q, sigma):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
@@ -260,6 +266,8 @@ class SwitchingHullWhite(SwitchingModel):
     equal the model is QuantLib's and reproduces the curve exactly; with switching, the averaged model reproduces the
     curve and the expansion adds the switching corrections. termStructure: a flat rate, a callable t -> discount factor,
     or a QuantLib YieldTermStructureHandle (times in years from its reference date)."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, termStructure, a, sigma):
         super().__init__(chain)
         self.a = float(a); self.sigma = _per_regime(sigma, self.n, "sigma")
@@ -326,6 +334,8 @@ class SwitchingG2(SwitchingModel):
     """QuantLib G2(termStructure, a, sigma, b, eta, rho): r = x + y + phi(t), dx = -a x dt + sigma dW1,
     dy = -b y dt + eta dW2, corr rho, phi(t) fitted to the initial curve. sigma, eta and rho may switch; phi is fitted
     with the stationary-average covariance, so with every regime equal the model is QuantLib's."""
+    _diffusion, _switching = ("sigma", "eta", "rho"), ("sigma", "eta", "rho")          # see regimelib.information
+
     def __init__(self, chain, termStructure, a, sigma, b, eta, rho):
         super().__init__(chain)
         self.a, self.b = float(a), float(b)
@@ -396,6 +406,8 @@ class SwitchingHestonVolOfVol(SwitchingModel):
     rho) with sigma = xi per regime). The switched operators v d_vv / 2 and rho v d_xv do not reduce exactly, so this
     model lives in the first-order tier: FirstOrderFDEngine on the (log S, v) grid, SwitchingFDReferee for the
     switching solution."""
+    _diffusion, _switching = ("xi",), ("xi",)          # see regimelib.information
+
     def __init__(self, chain, S0, r, q, v0, kappa, theta, xi, rho):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
@@ -488,6 +500,8 @@ SwitchingBlackScholesProcess.operators = _bs_operators
 class SwitchingCEVProcess(SwitchingModel):
     """dS = (r - q) S dt + sigma_y S^beta dW (QuantLib CEV process parameters S0, r, q, sigma, beta); sigma switches.
     Non-affine: the switched sigma^2 multiplies A = S^{2 beta} d_SS / 2, which does not commute with the drift."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, S0, r, q, sigma, beta):
         super().__init__(chain)
         self.S0, self.r, self.q, self.beta = float(S0), float(r), float(q), float(beta)

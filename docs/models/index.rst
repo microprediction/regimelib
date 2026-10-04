@@ -137,6 +137,9 @@ price for the same inputs.
    * - :doc:`instruments`
      - claims on the regime, digital options, credit default swaps, geometric Asian options, barrier and American
        options, sensitivities to the parameters
+   * - :doc:`information`
+     - a belief as the starting regime; observed against inferred regimes for options on bonds and swaps and for
+       early exercise; the belief as a state variable
 
 The common formula
 ------------------
@@ -262,3 +265,4 @@ this one.
    heston_vol_of_vol
    bond_options
    instruments
+   information

@@ -38,6 +38,7 @@ linear system, the closed form for a two-regime chain, and that closed form comp
   :doc:`models/variance_gamma`
 - **Hybrid:** :doc:`models/equity_rates`
 - **Instruments:** :doc:`models/bond_options`, :doc:`models/instruments`
+- **Information:** :doc:`models/information`, on observed and inferred regimes
 
 The common formula, the helpers and the index table are on :doc:`models/index`.
 
