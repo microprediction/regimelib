@@ -1,9 +1,11 @@
 # regimelib
 
-QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion of
-[homogenization.microprediction.org](https://homogenization.microprediction.org).
+QuantLib's models with a hidden Markov regime: any parameter of a model may take a different value in each state of
+a finite Markov chain, and the usual instruments are priced under it.
 
-Install: `pip install regimelib` ([PyPI](https://pypi.org/project/regimelib/)). Documentation: [regimeswitching.org/python](https://regimeswitching.org/python/) (QuantLib-Python's layout: instruments, engines, models, helpers, examples); the site [regimeswitching.org](https://regimeswitching.org) is the home of this and the ports to come.
+- **Install:** `pip install regimelib` ([PyPI](https://pypi.org/project/regimelib/))
+- **Documentation:** [regimelib.org](https://regimelib.org). Every model has one page with its mathematics and the
+  Python that evaluates it ([model index](https://regimelib.org/models/index.html)).
 
 Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it
@@ -39,24 +41,26 @@ print(opt.NPV())
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
 | `HestonProcess` with `sigma` (vol-of-vol) switching | `SwitchingHestonVolOfVol(chain, S0, r, q, v0, kappa, theta, xi, rho)` (first-order tier, 2-D grid; frozen limit against `AnalyticHestonEngine`) | `xi` |
 
-The mathematics of each model and the Python that evaluates it, on one page per model ([index](https://regimeswitching.org/python/models/index.html)):
+The mathematics of each model and the Python that evaluates it, on one page per model ([index](https://regimelib.org/models/index.html)):
 
 | regimelib | mathematics and Python |
 |---|---|
-| `SwitchingVasicek` | [Vasicek](https://regimeswitching.org/python/models/vasicek.html) |
-| `SwitchingVasicekJumps` | [Vasicek with jumps](https://regimeswitching.org/python/models/vasicek_jumps.html) |
-| `SwitchingCoxIngersollRoss` | [Cox–Ingersoll–Ross](https://regimeswitching.org/python/models/cir.html) |
-| `SwitchingHullWhite` | [Hull–White](https://regimeswitching.org/python/models/hull_white.html) |
-| `SwitchingG2` | [G2++](https://regimeswitching.org/python/models/g2.html) |
-| `SwitchingIntensityBasket` | [Intensity basket](https://regimeswitching.org/python/models/intensity_basket.html) |
-| `SwitchingBlackScholesProcess` | [Black–Scholes](https://regimeswitching.org/python/models/black_scholes.html) |
-| `SwitchingMerton76Process` | [Merton jump diffusion](https://regimeswitching.org/python/models/merton.html) |
-| `SwitchingVarianceGammaProcess` | [Variance gamma](https://regimeswitching.org/python/models/variance_gamma.html) |
-| `SwitchingHestonModel` | [Heston](https://regimeswitching.org/python/models/heston.html) |
-| `SwitchingBatesModel` | [Bates](https://regimeswitching.org/python/models/bates.html) |
-| `SwitchingEquityRates` | [Equity with stochastic rates](https://regimeswitching.org/python/models/equity_rates.html) |
-| `SwitchingCEVProcess` | [CEV](https://regimeswitching.org/python/models/cev.html) |
-| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://regimeswitching.org/python/models/heston_vol_of_vol.html) |
+| `SwitchingVasicek` | [Vasicek](https://regimelib.org/models/vasicek.html) |
+| `SwitchingVasicekJumps` | [Vasicek with jumps](https://regimelib.org/models/vasicek_jumps.html) |
+| `SwitchingCoxIngersollRoss` | [Cox–Ingersoll–Ross](https://regimelib.org/models/cir.html) |
+| `SwitchingHullWhite` | [Hull–White](https://regimelib.org/models/hull_white.html) |
+| `SwitchingG2` | [G2++](https://regimelib.org/models/g2.html) |
+| `SwitchingIntensityBasket` | [Intensity basket](https://regimelib.org/models/intensity_basket.html) |
+| `SwitchingBlackScholesProcess` | [Black–Scholes](https://regimelib.org/models/black_scholes.html) |
+| `SwitchingMerton76Process` | [Merton jump diffusion](https://regimelib.org/models/merton.html) |
+| `SwitchingVarianceGammaProcess` | [Variance gamma](https://regimelib.org/models/variance_gamma.html) |
+| `SwitchingHestonModel` | [Heston](https://regimelib.org/models/heston.html) |
+| `SwitchingBatesModel` | [Bates](https://regimelib.org/models/bates.html) |
+| `SwitchingEquityRates` | [Equity with stochastic rates](https://regimelib.org/models/equity_rates.html) |
+| `SwitchingCEVProcess` | [CEV](https://regimelib.org/models/cev.html) |
+| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://regimelib.org/models/heston_vol_of_vol.html) |
+| bond options, swaptions, caps | [Options on bonds, swaptions and caps](https://regimelib.org/models/bond_options.html) |
+| other instruments | [Other instruments](https://regimelib.org/models/instruments.html) |
 
 Instruments, with the QuantLib engine that the frozen limit is checked against:
 
@@ -125,4 +129,5 @@ Roadmap: parameter greeks for the option formulas; ports to other languages with
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
-[microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.
+[microprediction/homogenization](https://github.com/microprediction/homogenization), the general site on the
+fast-switching expansion; the mathematics of each model here is at [regimelib.org](https://regimelib.org).
