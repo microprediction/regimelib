@@ -9,39 +9,97 @@ import numpy as np
 from .fastswitch import ExpSum, Cheb
 
 
+# ---------------------------------------------------------------- loadings that survive a small or zero reversion speed
+SMALL_SPEED = 0.05      # below this value of kappa T an exponential sum would cancel digits it cannot afford
+
+
+def stable_B(kappa, t, c=0.0):
+    """c e^{-kappa t} + (1 - e^{-kappa t}) / kappa, with its limit c + t at kappa = 0."""
+    if kappa == 0.0:
+        return c + t
+    return c * math.exp(-kappa * t) - math.expm1(-kappa * t) / kappa
+
+
+def ou_variance(kappa, t):
+    """int_0^t e^{-2 kappa s} ds = (1 - e^{-2 kappa t}) / (2 kappa), with its limit t."""
+    return t if kappa == 0.0 else -math.expm1(-2.0 * kappa * t) / (2.0 * kappa)
+
+
+def int_B2(kappa, t):
+    """int_0^t B(s)^2 ds for B = (1 - e^{-kappa s}) / kappa: the closed form away from zero, quadrature near it."""
+    if abs(kappa) * t >= SMALL_SPEED:
+        return (t + 2.0 * math.expm1(-kappa * t) / kappa - math.expm1(-2.0 * kappa * t) / (2.0 * kappa)) / kappa ** 2
+    x, w = np.polynomial.legendre.leggauss(16)
+    return float(sum(wi * stable_B(kappa, (xi + 1) * t / 2) ** 2 for xi, wi in zip(x, w)) * t / 2)
+
+
+def loading(kappa, c=0.0, T=None):
+    """The state coefficient B_c as an object the engines can multiply and integrate, with its stable evaluation.
+    An exponential sum has coefficients of size 1 / kappa that cancel when kappa T is small, so there (and at
+    kappa = 0, where B_c = c + t) it is a Chebyshev series on [0, T] instead."""
+    f = lambda t: stable_B(kappa, t, c)
+    if T is not None and abs(kappa) * T < SMALL_SPEED:
+        return Cheb.fit(f, T, 24), f
+    if kappa == 0.0:
+        raise ValueError("a zero reversion speed needs the horizon T")
+    return ExpSum({0: 1 / kappa, kappa: c - 1 / kappa}), f
+
+
 # ---------------------------------------------------------------- Gaussian factors (sums of exponentials)
-def gaussian_factors(kappas, thetas, sigmas, rhos, weights):
+def gaussian_factors(kappas, thetas, sigmas, rhos, weights, T=None):
     """Factors dx_j = kappa_j (theta_j[y] - x_j) dt + sigma_j[y] dW_j, corr(dW_j, dW_l) = rhos[y][j][l].
     Quantity E[exp(-int sum_j c_j x_j)] with c = weights: prefactor exp(-sum_j c_j B_j x_j),
     B_j = c_j (1 - exp(-kappa_j t)) / kappa_j, and
-    g_i = -sum_j kappa_j theta_j[i] B_j + (1/2) sum_{j,l} rho_i[j][l] sigma_j[i] sigma_l[i] B_j B_l."""
+    g_i = -sum_j kappa_j theta_j[i] B_j + (1/2) sum_{j,l} rho_i[j][l] sigma_j[i] sigma_l[i] B_j B_l.
+    With the horizon T given, a small or zero reversion speed is handled (see `loading`)."""
     J, n = len(kappas), len(thetas[0])
-    Bs = [ExpSum({0: weights[j] / kappas[j], kappas[j]: -weights[j] / kappas[j]}) for j in range(J)]
+    small = T is not None and any(abs(k) * T < SMALL_SPEED for k in kappas)
+    Bf = [(lambda j: (lambda t: weights[j] * stable_B(kappas[j], t)))(j) for j in range(J)]
+    if small:                                                 # one kind of series for every factor, so they multiply
+        Bs = [Cheb.fit(Bf[j], T, 24) for j in range(J)]
+    else:
+        Bs = [ExpSum({0: weights[j] / kappas[j], kappas[j]: -weights[j] / kappas[j]}) for j in range(J)]
     g = []
     for i in range(n):
-        gi = ExpSum()
+        gi = None
         for j in range(J):
-            gi = gi + Bs[j].scale(-kappas[j] * thetas[j][i])
+            term = Bs[j].scale(-kappas[j] * thetas[j][i]); gi = term if gi is None else gi + term
             for l in range(J):
                 gi = gi + (Bs[j] * Bs[l]).scale(0.5 * rhos[i][j][l] * sigmas[j][i] * sigmas[l][i])
         g.append(gi)
-    gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+
+    def gf(i):
+        def f(t):
+            b = [Bf[j](t) for j in range(J)]
+            return (-sum(kappas[j] * thetas[j][i] * b[j] for j in range(J))
+                    + 0.5 * sum(rhos[i][j][l] * sigmas[j][i] * sigmas[l][i] * b[j] * b[l] for j in range(J) for l in range(J)))
+        return f
+    gfuncs = [gf(i) for i in range(n)]
 
     def prefactor(t, xs):
-        e = -sum(Bs[j].value(t) * xs[j] for j in range(J))
+        e = -sum(Bf[j](t) * xs[j] for j in range(J))
         return cmath.exp(e) if isinstance(e, complex) else math.exp(e)
     return g, gfuncs, prefactor
 
 
 # ---------------------------------------------------------------- CIR with a switching mean level (Chebyshev)
+def cir_B(kappa, sigma, t):
+    """The CIR loading 2 (e^{ht} - 1) / ((h + kappa)(e^{ht} - 1) + 2h), h = sqrt(kappa^2 + 2 sigma^2), written in
+    d = 1 - e^{-ht} so that it neither overflows at large h t nor subtracts near-equal numbers at small h t; B = t
+    at h = 0."""
+    h = math.sqrt(kappa ** 2 + 2 * sigma ** 2)
+    if h == 0.0:
+        return t
+    d = -math.expm1(-h * t)
+    return 2 * d / (2 * h + (kappa - h) * d)
+
+
 def cir_switching_mean(kappa, thetas, sigma, T):
     """dx = kappa (theta[y] - x) dt + sigma sqrt(x) dW. B solves B' = 1 - kappa B - sigma^2 B^2 / 2, B(0) = 0,
     independent of the regime, so u_i = exp(-B x) a_i with g_i = -kappa theta_i B."""
     h = math.sqrt(kappa ** 2 + 2 * sigma ** 2)
 
-    def B(t):
-        e = math.exp(h * t) - 1
-        return 2 * e / ((h + kappa) * e + 2 * h)
+    B = lambda t: cir_B(kappa, sigma, t)
     gfuncs = [(lambda th: (lambda t: -kappa * th * B(t)))(th) for th in thetas]
     Bc = Cheb.fit(B, T, 80)
     g = [Bc.scale(-kappa * th) for th in thetas]
@@ -53,8 +111,7 @@ def vasicek_jumps(kappa, thetas, sigmas, intensities, jump_mean, T):
     """dx = kappa (theta[y] - x) dt + sigma[y] dW + dJ, J compound Poisson at rate intensities[y] with
     exponential jumps of mean m. u_i = exp(-B x) a_i, g_i = -kappa theta_i B + sigma_i^2 B^2 / 2
     + l_i (1 / (1 + m B) - 1), B = (1 - exp(-kappa t)) / kappa."""
-    def B(t):
-        return (1 - math.exp(-kappa * t)) / kappa
+    B = lambda t: stable_B(kappa, t)
 
     def gf(th, s, l):
         return lambda t: -kappa * th * B(t) + 0.5 * s * s * B(t) ** 2 + l * (1 / (1 + jump_mean * B(t)) - 1)
@@ -140,10 +197,11 @@ def bs_switching(u, r, sigmas):
 
 
 # ---------------------------------------------------------------- Vasicek with a terminal exponential payoff
-def vasicek_terminal(kappa, thetas, sigmas, c):
+def vasicek_terminal(kappa, thetas, sigmas, c, T=None):
     """E[exp(-int_0^t x - c x_t) 1{y_t = j} | x_0, y_0 = i] = exp(-Bc(t) x_0) a_i(t) with a(0) = e_j,
-    Bc(t) = c exp(-kappa t) + (1 - exp(-kappa t)) / kappa, g_i = -kappa theta_i Bc + sigma_i^2 Bc^2 / 2."""
-    Bc = ExpSum({0: 1 / kappa, kappa: c - 1 / kappa})
+    Bc(t) = c exp(-kappa t) + (1 - exp(-kappa t)) / kappa, g_i = -kappa theta_i Bc + sigma_i^2 Bc^2 / 2.
+    With the horizon T given, a small or zero reversion speed is handled (see `loading`)."""
+    Bc, f = loading(kappa, c, T)
     g = [Bc.scale(-kappa * th) + (Bc * Bc).scale(0.5 * s * s) for th, s in zip(thetas, sigmas)]
-    gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+    gfuncs = [(lambda th, s: (lambda t: -kappa * th * f(t) + 0.5 * s * s * f(t) ** 2))(th, s) for th, s in zip(thetas, sigmas)]
     return g, gfuncs, Bc

@@ -56,7 +56,7 @@ class SwitchingVasicek(SwitchingModel):
 
     def bondForcing(self, T):
         rhos = [[[1.0]]] * self.n
-        g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0])
+        g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0], T)
         return g, gfuncs, (lambda t: pre(t, [self.r0]))
 
     def operators(self, instrument, n, width, stretch=None):
@@ -84,7 +84,7 @@ class SwitchingVasicek(SwitchingModel):
         r = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(r)))
-        g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0)
+        g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
         return avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(r, float)[None, :])
 
@@ -288,16 +288,16 @@ class SwitchingHullWhite(SwitchingModel):
         s2bar = float(pi @ np.asarray(self.sigma) ** 2)
         # r = x + phi(t), dx = -a x dt + sigma dW, x0 = 0; phi = f(0,t) + s2bar (1 - e^{-a t})^2 / (2 a^2)
         # P(0,T) = exp(-int phi) a_i(T) with g_i = sigma_i^2 B^2 / 2, B = (1 - e^{-a t}) / a
-        B = ExpSum({0: 1 / a, a: -1 / a})
+        B, Bf = _m.loading(a, 0.0, T)                              # a Chebyshev series when a T is small, B = t at a = 0
         g = [(B * B).scale(0.5 * s * s) for s in self.sigma]
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        gfuncs = [(lambda s: (lambda t: 0.5 * s * s * Bf(t) ** 2))(s) for s in self.sigma]
         pre = lambda t: self.discount(t) * math.exp(-self._intShift(t))
         return g, gfuncs, pre
 
     def _intShift(self, t):
         """int_0^t of the averaged variance term of phi: s2bar (1 - e^{-a s})^2 / (2 a^2) integrated."""
         a = self.a; pi = self.chain.stationaryDistribution(); s2bar = float(pi @ np.asarray(self.sigma) ** 2)
-        return s2bar / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+        return 0.5 * s2bar * _m.int_B2(a, t)                       # s2bar T^3 / 6 in the Ho-Lee limit a = 0
 
     def deterministicDiscount(self, t1, t2):
         """exp(-int_{t1}^{t2} phi), the discounting carried by the fitted drift rather than by the factor x."""
@@ -311,7 +311,7 @@ class SwitchingHullWhite(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            L = width or 8 * math.sqrt(max(s2) / (2 * self.a))
+            L = width or 8 * math.sqrt(max(s2) * _m.ou_variance(self.a, max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])) if self.a == 0 else max(s2) / (2 * self.a))
             grid = Grid1D(-L, L, n)
         D1, D2 = grid.d1(), grid.d2(); x = grid.x
         Adiff = 0.5 * D2
@@ -325,7 +325,7 @@ class SwitchingHullWhite(SwitchingModel):
         x = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(x)))
-        g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0)
+        g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
         return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(x, float)[None, :])
 

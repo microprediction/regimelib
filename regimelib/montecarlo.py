@@ -44,6 +44,11 @@ class MonteCarloSwitchingEngine:
             for states, durs in self._paths(T):
                 # r follows dr = a (b_y - r) dt + sigma_y dW; int_0^T r ds is Gaussian given the path
                 ends = np.cumsum(durs); starts = ends - durs
+                if a == 0.0:                                                    # no reversion: r = r0 + int sigma dW
+                    var = sum(m.sigma[y] ** 2 * ((T - s0) ** 3 - (T - s1) ** 3) / 3 for y, s0, s1 in zip(states, starts, ends))
+                    final = states[-1] if len(states) else self.regime
+                    paid = instrument.regimeAtMaturity is None or final == instrument.regimeAtMaturity
+                    vals.append(math.exp(-m.r0 * T + 0.5 * var) if paid else 0.0); continue
                 mean = m.r0 * (1 - math.exp(-a * T)) / a; var = 0.0
                 for y, s0, s1 in zip(states, starts, ends):
                     # contribution of the drift toward b_y over [s0, s1] to int_0^T r, and of the noise there

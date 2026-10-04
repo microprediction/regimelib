@@ -4,7 +4,7 @@ import math
 import cmath
 import numpy as np
 from .fastswitch import FastSwitch, numerical_a_callable
-from .models import bs_switching, vasicek_terminal
+from .models import bs_switching, vasicek_terminal, stable_B, ou_variance
 
 
 def _nodes(U, n):
@@ -69,7 +69,7 @@ def _terminal_vectors(t, Q, kappa, thetas, sigmas, cs, A0, rtol=1e-12):
 
     def rhs(r, y):
         A = (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
-        Bc = cs * math.exp(-kappa * r) + (1 - math.exp(-kappa * r)) / kappa
+        Bc = cs * math.exp(-kappa * r) + stable_B(kappa, r)
         d = (-kappa * th * Bc + 0.5 * s2 * Bc * Bc) * A + Q @ A
         return np.concatenate([d.real.ravel(), d.imag.ravel()])
     y0 = np.asarray(A0, complex)
@@ -92,15 +92,15 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     wv, vl = np.linalg.eig(Q.T)
     pi = np.real(vl[:, np.argmin(abs(wv))])
     pi = pi / pi.sum()
-    var = float(pi @ np.asarray(sigmas) ** 2) / (2 * kappa) * (1 - math.exp(-2 * kappa * T))
+    var = float(pi @ np.asarray(sigmas) ** 2) * ou_variance(kappa, T)
     if U is None:
         U = 8 / math.sqrt(var)
-    b = (1 - math.exp(-kappa * (S - T))) / kappa
+    b = stable_B(kappa, S - T)
     ET = math.exp(-kappa * T)
     mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)
 
     def a_vec(t, c, a0):
-        g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c)
+        g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c, t)
         if order is None:
             a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         else:
@@ -129,7 +129,7 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
             avals = np.array([[a_vec(T, c0 - 1j * u, np.eye(m)[j])[0][start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for k, (j, c0, weight) in enumerate(cases):
-            Bv = (c0 - 1j * us) * ET + (1 - ET) / kappa
+            Bv = (c0 - 1j * us) * ET + stable_B(kappa, T)
             f = (np.exp(-1j * us * xstar[j]) * avals[k] * np.exp(-Bv * x0)).imag / us
             val += weight * (-(wk @ f) / math.pi)
             err += abs(weight) * abs((wk - wg) @ f) / math.pi

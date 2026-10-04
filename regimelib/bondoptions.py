@@ -8,7 +8,7 @@ import cmath
 import numpy as np
 from scipy.optimize import brentq
 from ._engine.options import _kronrod_nodes, _terminal_vectors
-from ._engine.models import vasicek_terminal
+from ._engine.models import vasicek_terminal, stable_B, ou_variance
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
 
 
@@ -17,16 +17,16 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
     dx = kappa (theta_y - x) dt + sigma_y dW. order=None uses the numerical solution; an integer the expansion."""
     Q = np.asarray(Q, float); m = len(thetas)
     wv, vl = np.linalg.eig(Q.T); pi = np.real(vl[:, np.argmin(abs(wv))]); pi = pi / pi.sum()
-    var = float(pi @ np.asarray(sigmas) ** 2) / (2 * kappa) * (1 - math.exp(-2 * kappa * T))
+    var = float(pi @ np.asarray(sigmas) ** 2) * ou_variance(kappa, T)
     if U is None:
         U = 8 / math.sqrt(var)
     ET = math.exp(-kappa * T); mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)
 
     def a_vec(t, c, a0):
-        g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c)
+        g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c, t)
         a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0) if order is None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
         return a, Bc.value(t)
-    bs = [(1 - math.exp(-kappa * (S - T))) / kappa for S, _ in cashflows]
+    bs = [stable_B(kappa, S - T) for S, _ in cashflows]
     A = [a_vec(S - T, 0.0, np.ones(m))[0].real for S, _ in cashflows]          # A[k][j]: bond k factor in regime j
     # one crossing per expiry regime: sum_k c_k A_kj e^{-b_k x*} = K, decreasing in x
     xstar = []
@@ -57,7 +57,7 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
             avals = np.array([[a_vec(T, c0 - 1j * u, np.eye(m)[j])[0][start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for kk, (j, c0, weight) in enumerate(cases):
-            Bv = (c0 - 1j * us) * ET + (1 - ET) / kappa
+            Bv = (c0 - 1j * us) * ET + stable_B(kappa, T)
             f = (np.exp(-1j * us * xstar[j]) * avals[kk] * np.exp(-Bv * x0)).imag / us
             val += weight * (-(wk @ f) / math.pi); err += abs(weight) * abs((wk - wg) @ f) / math.pi
         if err <= tol:
