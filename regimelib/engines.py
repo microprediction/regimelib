@@ -19,6 +19,10 @@ def _gauss(U, n):
     return (x + 1) * U / 2, w * U / 2
 
 
+class IntensityWarning(UserWarning):
+    """A default intensity model has produced a survival probability above one."""
+
+
 class ExpansionWarning(UserWarning):
     """The fast-switching expansion may not have converged for this instrument and chain."""
 
@@ -171,18 +175,31 @@ class SwitchingEngine:
     def _cds(self, cds):
         """Survival Q(t) is the model's bond price; premium leg = s sum tau_i D(t_i) Q(t_i) (+ accrual to the mid-point
         on default), protection = (1 - R) sum D(t_mid) (Q(t_{i-1}) - Q(t_i))."""
-        Q = lambda t: 1.0 if t <= 0 else self.calculate(ZeroCouponBond(t))
-        D = cds.discount; prem = prot = 0.0; t0 = 0.0
+        Q = lambda t: 1.0 if t <= 0 else self._survival(t)
+        D = cds.discount; annuity = prot = 0.0; t0 = 0.0            # the annuity is the premium leg per unit spread
         for t1 in cds.times:
             tau = t1 - t0; tm = 0.5 * (t0 + t1); q0, q1 = Q(t0), Q(t1)
-            prem += cds.spread * tau * D(t1) * q1
+            annuity += tau * D(t1) * q1
             if cds.accrualOnDefault:
-                prem += cds.spread * 0.5 * tau * D(tm) * (q0 - q1)
+                annuity += 0.5 * tau * D(tm) * (q0 - q1)
             prot += (1.0 - cds.recovery) * D(tm) * (q0 - q1)
             t0 = t1
+        if annuity == 0.0:
+            raise ValueError("the premium annuity is zero, so the fair spread is undefined")
+        prem = cds.spread * annuity
         sign = 1.0 if cds.isBuyer else -1.0
         return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
-                "fairSpread": cds.spread * prot / prem}
+                "fairSpread": prot / annuity}
+
+    def _survival(self, t):
+        """The model's bond read as a survival probability. A Gaussian intensity (Vasicek) can be negative, so the
+        value can exceed one at high volatility or long horizons; that is reported, not hidden."""
+        q = self.calculate(ZeroCouponBond(t))
+        if q > 1.0 + 1e-12:
+            warnings.warn(f"the survival probability to t = {t:g} is {q:.6g}, above one: a Gaussian (Vasicek) intensity is "
+                          "negative with positive probability, and at these parameters that matters. Use a "
+                          "Cox-Ingersoll-Ross intensity or a lower volatility.", IntensityWarning, stacklevel=4)
+        return q
 
     def _hybridVanilla(self, opt):
         """Lewis's formula with the discounted characteristic function (regimelib.hybrid); the put by parity with the
