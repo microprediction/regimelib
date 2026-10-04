@@ -431,7 +431,12 @@ class SwitchingIntensityBasket(SwitchingModel):
     by the same regime chain, with independent diffusions. The joint survival E exp(-int sum_k lambda^k) is the
     bond of the summed forcing with the product of the prefactors, so ZeroCouponBond(t) is the probability that no
     name has defaulted by t and CreditDefaultSwap is a first-to-default swap. The common regime is the only source
-    of dependence: defaultCorrelation(t) measures it."""
+    of dependence: defaultCorrelation(t) measures it.
+
+    A Vasicek intensity is Gaussian and so negative with positive probability. It is the Ornstein-Uhlenbeck hazard of
+    the fast-switching literature and is accurate when the volatility is small against the level; when it is not, the
+    "survival probability" can exceed one, and the engines warn (IntensityWarning). A Cox-Ingersoll-Ross intensity
+    stays nonnegative."""
     def __init__(self, models):
         chain = models[0].chain
         if any(m.chain is not chain for m in models):
@@ -453,7 +458,7 @@ class SwitchingIntensityBasket(SwitchingModel):
         from .engines import NumericalSwitchingEngine
         from .instruments import ZeroCouponBond
         def surv(model):
-            b = ZeroCouponBond(t); b.setPricingEngine(NumericalSwitchingEngine(model, regime=regime)); return b.NPV()
+            return NumericalSwitchingEngine(model, regime=regime)._survival(t)
         q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
         return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
 
