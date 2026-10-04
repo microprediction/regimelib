@@ -11,6 +11,7 @@ from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
 from .chain import stateIndex
+from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
 from .g2options import g2_zcb_call
 from .hybrid import SwitchingEquityRates
 
@@ -53,8 +54,9 @@ def _constantValue(gi):
 class SwitchingEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, nodes=96):
-        self.model, self.regime, self.nodes = model, stateIndex(regime, model.n), nodes
+    def __init__(self, model, regime=0, nodes=96, information="inferred"):
+        self.model, self.nodes, self.information = model, nodes, checkInformation(information)
+        self.regime, self.belief = startingBelief(regime, model.n)      # a regime index, or a belief over the regimes
         self._memo = {}                                       # (fingerprint, T, u) -> terminal data, shared across strikes
 
     def _fingerprint(self):
@@ -91,8 +93,12 @@ class SwitchingEngine:
     def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
 
+    @byBelief()
     def calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
+        if (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
+                and self.information == "inferred" and not regimeIsKnown(m)):
+            raise notRevealed("the price of an option on a bond or a swap")   # one exercise boundary per regime below
         if isinstance(instrument, VanillaOption):                       # the transforms below are of the terminal value
             rejectFeatures(instrument, "the characteristic-function engine", ("American exercise", "a barrier"),
                            "SwitchingFDEngine")
@@ -207,7 +213,7 @@ class SwitchingEngine:
         prem = cds.spread * annuity
         sign = 1.0 if cds.isBuyer else -1.0
         return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
-                "fairSpread": prot / annuity}
+                "fairSpread": prot / annuity, "protection": prot, "annuity": annuity}
 
     def _survival(self, t):
         """The model's bond read as a survival probability. A Gaussian intensity (Vasicek) can be negative, so the
@@ -368,8 +374,8 @@ class FastSwitchingEngine(SwitchingEngine):
     """order: an integer, or None to add terms until successive orders agree to `tol` (relative) or the next term
     stops shrinking, the best truncation of an asymptotic series. `maxOrder` bounds the search. After calculate(),
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
-    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12):
-        super().__init__(model, regime, nodes)
+    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12, information="inferred"):
+        super().__init__(model, regime, nodes, information)
         order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
@@ -415,6 +421,7 @@ class FastSwitchingEngine(SwitchingEngine):
     def _order(self):
         return self.order if self.order is not None else self.maxOrder
 
+    @byBelief(worst=("orderUsed", "lastIncrement"))
     def calculate(self, instrument, results=False):
         self._diag = dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0)
         out = self._calculateOrders(instrument)
@@ -474,8 +481,8 @@ def _numericalAVector(Q, g, gfuncs, T, rtol=1e-12, a0=None):
 
 
 class NumericalSwitchingEngine(SwitchingEngine):
-    def __init__(self, model, regime=0, nodes=96, rtol=1e-12):
-        super().__init__(model, regime, nodes)
+    def __init__(self, model, regime=0, nodes=96, rtol=1e-12, information="inferred"):
+        super().__init__(model, regime, nodes, information)
         self.rtol = rtol
 
     def _a(self, g, gfuncs, T, a0=None):

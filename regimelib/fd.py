@@ -10,20 +10,22 @@ import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
 from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption, rejectFeatures
-from .chain import stateIndex
+from .instruments import ZeroCouponBondOption, CapFloor
+from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
 
 
 class SwitchingFDEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None):
+    def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None, information="inferred"):
         """`stretch` concentrates the nodes of a two-dimensional grid around the strike and the starting factor
         (the width of the dense region as a fraction of the interval, 0.1 to 0.3 is usual); None is uniform."""
         import numbers
         if isinstance(steps, bool) or not isinstance(steps, numbers.Integral) or steps < 1:
             raise ValueError(f"steps must be a positive integer number of time steps, got {steps!r}")
-        regime, steps = stateIndex(regime, model.n), int(steps)
-        self.model, self.regime, self.n, self.steps, self.width, self.stretch = model, regime, n, steps, width, stretch
+        self.model, self.n, self.steps, self.width, self.stretch = model, n, int(steps), width, stretch
+        self.regime, self.belief = startingBelief(regime, model.n)      # a regime index, or a belief over the regimes
+        self.information = checkInformation(information)
 
     # -- the block operator on a given grid ---------------------------------------------------------------------
     def _system(self, instrument, width):
@@ -79,6 +81,27 @@ class SwitchingFDEngine:
         return {"value": grid.interp(u, x0), "delta": delta, "gamma": gamma, "theta": theta}
 
     def calculate(self, instrument, results=False):
+        """Options on bonds and swaps, and early exercise, depend on what is known about the regime. When the path
+        reveals it (or the regimes coincide) the regime-by-regime solve below is the price under either information
+        setting. When it does not, `information="observed"` uses that solve and `information="inferred"` carries the
+        belief as a state variable (two regimes, Vasicek or CIR rate options)."""
+        rate = isinstance(instrument, (Swaption, CouponBondOption, ZeroCouponBondOption, CapFloor))
+        acts = rate or getattr(instrument, "isAmerican", False)
+        if acts and self.information == "inferred" and not regimeIsKnown(self.model):
+            if not rate:
+                raise notRevealed("early exercise")
+            out = self._inferredRateOption(instrument)
+            return out if results else out["value"]
+        return self._byRegime(instrument, results)
+
+    @byBelief()
+    def _byRegime(self, instrument, results=False):
+        if isinstance(instrument, ZeroCouponBondOption):
+            instrument = CouponBondOption("call" if instrument.isCall else "put", instrument.strike, instrument.maturity,
+                                          [(instrument.bondMaturity, 1.0)])
+        if isinstance(instrument, CapFloor):
+            out = {"value": sum(w * self._rateOption(o)["value"] for w, o in _caplets(instrument))}
+            return out if results else out["value"]
         if isinstance(instrument, (Swaption, CouponBondOption)):
             out = self._rateOption(instrument)
             return out if results else out["value"]
@@ -127,10 +150,7 @@ class SwitchingFDEngine:
         if not hasattr(m, "bondOnGrid"):
             raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite, SwitchingCoxIngersollRoss, SwitchingG2)")
         Big, grid, _, r0, nR = self._system(inst, self.width)
-        if isinstance(inst, Swaption):
-            exercises = inst.exerciseTimes or [inst.maturity]; isCall, K = not inst.isPayer, inst.notional
-        else:
-            exercises = [inst.maturity]; isCall, K = inst.isCall, inst.strike
+        exercises, isCall, K = _exerciseTerms(inst)
         T_end = exercises[-1]
         def exerciseValue(t):
             """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid, expressed in
@@ -150,3 +170,80 @@ class SwitchingFDEngine:
         self.steps = steps
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
         return {"value": m.deterministicDiscount(0.0, T_end) * grid.interp(u[blk], r0)}
+
+    # -- the same options when the regime is inferred: the belief is a state variable -----------------------------
+    def _inferredRateOption(self, inst):
+        """Two regimes that differ only in the level the rate reverts to. Nobody sees the regime; everybody sees the
+        rate, and the belief p = P(regime 0 | the rate's path) moves only when the rate surprises:
+
+            dr = a (b(p) - r) dt + s(r) dW,        b(p) = p b_0 + (1 - p) b_1,
+            dp = (q_10 (1 - p) - q_01 p) dt + p (1 - p) a (b_0 - b_1) / s(r) dW,
+
+        one Brownian motion for both (the innovation of the filter), s(r) = sigma for Vasicek and sigma sqrt(r) for
+        CIR. The bond at (r, p) is the belief-weighted bond of the two regimes, so the exercise value is a function of
+        (r, p), and the option solves one equation on the (r, p) grid, with no regime blocks."""
+        from .firstorder import Grid2D
+        from .models import SwitchingVasicek, SwitchingCoxIngersollRoss
+        m = self.model
+        if m.n != 2 or not isinstance(m, (SwitchingVasicek, SwitchingCoxIngersollRoss)):
+            raise notRevealed("the price of an option on a bond or a swap")
+        if isinstance(inst, CapFloor):
+            return {"value": sum(w * self._inferredRateOption(o)["value"] for w, o in _caplets(inst))}
+        if isinstance(inst, ZeroCouponBondOption):
+            inst = CouponBondOption("call" if inst.isCall else "put", inst.strike, inst.maturity, [(inst.bondMaturity, 1.0)])
+        exercises, isCall, K = _exerciseTerms(inst)
+        T_end = exercises[-1]
+        nr, npts = self.n if isinstance(self.n, tuple) else (min(int(self.n), 301), 41)
+        _, _, _, rgrid, _, r0 = m.operators(inst, nr, self.width if not isinstance(self.width, tuple) or len(self.width) == 2 else None)
+        grid = Grid2D(rgrid.x[0], rgrid.x[-1], nr, 0.0, 1.0, npts)
+        R, P = grid.X, grid.V
+        Q = m.chain.generator; q01, q10 = Q[0, 1], Q[1, 0]
+        if isinstance(m, SwitchingVasicek):
+            a, (b0, b1), sig = m.a, m.b, m.sigma[0]
+            var = np.full_like(R, sig * sig)
+        else:
+            a, (b0, b1), sig = m.k, m.theta, m.sigma
+            var = sig * sig * np.maximum(R, 0.0)
+        level = P * b0 + (1.0 - P) * b1
+        cross = P * (1.0 - P) * a * (b0 - b1)                             # s(r) times the belief's loading on dW
+        floor = max(rgrid.x[1] - rgrid.x[0], 1e-12) * sig * sig           # CIR: the noise vanishes at r = 0 and the
+        gamma2 = cross * cross / np.maximum(var, floor)                   # belief would learn at once; bounded here
+        L = (sp.diags(a * (level - R)) @ grid.d1x + sp.diags(0.5 * var) @ grid.d2x
+             + sp.diags(q10 * (1.0 - P) - q01 * P) @ grid.d1v + sp.diags(0.5 * gamma2) @ grid.d2v
+             + sp.diags(cross) @ grid.d1xv - sp.diags(R)).tocsr()
+
+        def value(t):
+            """The swap or bond less the strike, at the belief-weighted bond; signed, so exercise compares like with like."""
+            bond = sum(c * m.bondOnGrid(rgrid, t, S) for S, c in inst.cashflows if S > t + 1e-12)      # regimes x rates
+            mixed = (np.outer(bond[0], grid.v) + np.outer(bond[1], 1.0 - grid.v)).ravel()
+            return (mixed - K) if isCall else (K - mixed)
+        steps = self.steps
+        u = np.maximum(value(T_end), 0.0)
+        t_hi = T_end
+        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
+            if t_hi > t_lo:
+                self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
+                u = self._march(L, u, t_hi - t_lo)
+            if t_lo > 0:
+                u = np.maximum(u, value(t_lo))
+            t_hi = t_lo
+        self.steps = steps
+        p0 = float(self.belief[0]) if self.belief is not None else (1.0 if self.regime == 0 else 0.0)
+        return {"value": grid.interp(u, (r0, p0))}
+
+
+def _exerciseTerms(inst):
+    """(exercise times, whether it is a call on the bond, strike) for a swaption or an option on a coupon bond."""
+    if isinstance(inst, Swaption):
+        return (inst.exerciseTimes or [inst.maturity]), not inst.isPayer, inst.notional
+    return [inst.maturity], inst.isCall, inst.strike
+
+
+def _caplets(cap):
+    """A cap or floor as weighted options on zero-coupon bonds: (1 + tau K) puts struck at 1 / (1 + tau K) per caplet."""
+    out = []
+    for T0, T1 in zip(cap.times[:-1], cap.times[1:]):
+        tau = T1 - T0; kb = 1.0 / (1.0 + tau * cap.strike)
+        option = CouponBondOption("put" if cap.isCap else "call", kb, T0, [(T1, 1.0)])
+        out.append((cap.notional * (1.0 + tau * cap.strike), option))
+    return out

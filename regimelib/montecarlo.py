@@ -6,7 +6,7 @@ import math
 import numpy as np
 from .instruments import ZeroCouponBond, VanillaOption, rejectFeatures
 from .models import SwitchingVasicek, SwitchingBlackScholesProcess
-from .chain import stateIndex
+from .information import startingBelief, byBelief
 
 
 def _N(x):
@@ -18,7 +18,8 @@ class MonteCarloSwitchingEngine:
         import numbers
         if isinstance(paths, bool) or not isinstance(paths, numbers.Integral) or paths < 2:
             raise ValueError(f"paths must be an integer of at least 2, so that a standard error exists; got {paths!r}")
-        self.model, self.regime, self.paths, self.seed = model, stateIndex(regime, model.n), int(paths), seed
+        self.model, self.paths, self.seed = model, int(paths), seed
+        self.regime, self.belief = startingBelief(regime, model.n)
         self.standardError = None
 
     def _paths(self, T):
@@ -34,6 +35,7 @@ class MonteCarloSwitchingEngine:
                     p = Q[y].copy(); p[y] = 0; p /= p.sum(); y = rng.choice(n, p=p)
             yield np.array(states), np.array(durs)
 
+    @byBelief(rss=("standardError",))
     def calculate(self, instrument):
         m, T = self.model, instrument.maturity
         vals = []
