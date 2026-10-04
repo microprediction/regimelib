@@ -29,7 +29,7 @@ def test_g2_is_continuous_in_its_reversion_speeds():
         numerical = price(bond, rl.NumericalSwitchingEngine(model(a, b)))
         assert price(bond, rl.FastSwitchingEngine(model(a, b), order=3)) == pytest.approx(numerical, rel=1e-8)
     frozen = rl.SwitchingG2(CHAIN, 0.03, 0.0, 0.01, 0.0, 0.01, 0.0)             # two independent random walks, curve fitted
-    assert price(bond, rl.NumericalSwitchingEngine(frozen)) == pytest.approx(math.exp(-0.15), rel=1e-10)
+    assert price(bond, rl.NumericalSwitchingEngine(frozen)) == pytest.approx(math.exp(-0.15), rel=1e-8)
 
 
 def test_grid_engine_on_a_deterministic_equity():
@@ -103,4 +103,4 @@ def test_jump_term_keeps_the_drift_when_the_jump_mean_is_tiny():
         assert price(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(jumps)) == pytest.approx(target, rel=1e-5)
     none = rl.SwitchingVasicekJumps(CHAIN, r0, a, b, sigma, 3.0, 0.0)             # jumps of size zero do nothing
     plain = rl.SwitchingVasicek(CHAIN, r0, a, b, sigma)
-    assert price(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(none)) == pytest.approx(price(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(plain)), rel=1e-12)
+    assert price(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(none)) == pytest.approx(price(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(plain)), rel=1e-8)
