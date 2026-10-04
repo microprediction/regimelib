@@ -26,6 +26,6 @@ Two things the library holds itself to:
 - **A referee for every number.** The frozen limit against QuantLib; with switching on, the numerical solution of the
   reduced system, the coupled PDE on a grid, or Monte Carlo with exact regime paths.
 
-The mathematics — the recursion, the initial layers, the Green–Kubo matrix for a non-reversible chain, the survival
-and bond formulas it started from — is on `homogenization.microprediction.org <https://homogenization.microprediction.org>`_.
-Each model's own mathematics, with the Python that evaluates it, is under :doc:`models/index`.
+The mathematics of each model, with the Python that evaluates it, is under :doc:`models/index`. The general theory —
+the recursion to every order, the initial layers, the Green–Kubo matrix for a non-reversible chain — is on
+`homogenization.microprediction.org <https://homogenization.microprediction.org>`_.

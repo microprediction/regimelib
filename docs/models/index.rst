@@ -123,6 +123,21 @@ price for the same inputs.
      - rates forcing at weight :math:`1 - iw` plus equity forcing at :math:`w`
      - second order
 
+.. rubric:: Instruments
+
+.. list-table::
+   :header-rows: 1
+   :widths: 34 66
+
+   * - Page
+     - Covers
+   * - :doc:`bond_options`
+     - options on zero-coupon and coupon bonds, swaptions, caps: the regime at expiry, Gil–Pelaez inversion,
+       Jamshidian's decomposition by regime, the first-order closed form
+   * - :doc:`instruments`
+     - claims on the regime, digital options, credit default swaps, geometric Asian options, barrier and American
+       options, sensitivities to the parameters
+
 The common formula
 ------------------
 
@@ -245,3 +260,5 @@ this one.
    equity_rates
    cev
    heston_vol_of_vol
+   bond_options
+   instruments
