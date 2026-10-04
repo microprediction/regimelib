@@ -48,7 +48,8 @@ class SwitchingFDEngine:
             keep = np.ones(N); keep[idx] = 0.0
             Big = sp.diags(keep) @ Big                                  # Dirichlet rows: u stays at its value
             u = u.copy(); u[idx] = val
-        half = splu((I - 0.5 * dt * Big).tocsc()); full_l = splu((I - 0.5 * dt * Big).tocsc()); full_r = I + 0.5 * dt * Big
+        half = full_l = splu((I - 0.5 * dt * Big).tocsc())               # the implicit half step and Crank-Nicolson share it
+        full_r = I + 0.5 * dt * Big
         for k in range(self.steps):
             if k < 2:                                                    # two implicit Euler half steps
                 u = half.solve(u); u = half.solve(u)
@@ -87,12 +88,51 @@ class SwitchingFDEngine:
         belief as a state variable (two regimes, Vasicek or CIR rate options)."""
         rate = isinstance(instrument, (Swaption, CouponBondOption, ZeroCouponBondOption, CapFloor))
         acts = rate or getattr(instrument, "isAmerican", False)
+        exact = self._withoutAGrid(instrument, rate)                     # deterministic models, and G2 with one live factor
+        if exact is not None:
+            return exact if results else exact["value"]
         if acts and self.information == "inferred" and not regimeIsKnown(self.model):
             if not rate:
                 raise notRevealed("early exercise")
             out = self._inferredRateOption(instrument)
             return out if results else out["value"]
         return self._byRegime(instrument, results)
+
+    def _withoutAGrid(self, instrument, rate):
+        """A model with no diffusion has a known path, and a grid in a state that does not move has no width. Price
+        those directly. A G2 model with one factor's volatility identically zero is the one-factor Hull-White model
+        in the other factor, and is solved as such."""
+        from .engines import NumericalSwitchingEngine, _noDiffusion, deterministicEquity
+        from .models import SwitchingG2, SwitchingHullWhite
+        from .hybrid import SwitchingEquityRates
+        from .instruments import ZeroCouponBond
+        m = self.model
+        start = self.regime if self.belief is None else list(self.belief)
+        if _noDiffusion(m) == "deterministic":
+            if rate:
+                reduced = NumericalSwitchingEngine(m, regime=start, information="observed")
+                bond = lambda t: 1.0 if t == 0 else reduced.calculate(ZeroCouponBond(t))
+                if isinstance(instrument, Swaption) and instrument.exerciseTimes:      # exercise on the best of the known dates
+                    call, K = not instrument.isPayer, instrument.notional
+                    values = []
+                    for t in instrument.exerciseTimes:
+                        swap = sum(c * bond(S) for S, c in instrument.cashflows if S > t + 1e-12) - K * bond(t)
+                        values.append(max(swap if call else -swap, 0.0))
+                    return {"value": max(values)}
+                return {"value": reduced.calculate(instrument)}
+            if isinstance(instrument, VanillaOption) and not isinstance(m, SwitchingEquityRates):
+                rejectFeatures(instrument, "the switching finite-difference engine", ("geometric averaging",),
+                               "NumericalSwitchingEngine or FastSwitchingEngine")
+                return {"value": deterministicEquity(m, instrument)}
+        if rate and isinstance(m, SwitchingG2):
+            for speed, vols, dead in ((m.a, m.sigma, m.eta), (m.b, m.eta, m.sigma)):
+                if all(v == 0.0 for v in dead) and any(v != 0.0 for v in vols):
+                    one = SwitchingHullWhite(m.chain, m.discount, speed, vols)
+                    n = self.n[0] if isinstance(self.n, tuple) else self.n
+                    width = self.width[0] if isinstance(self.width, tuple) else self.width
+                    engine = SwitchingFDEngine(one, regime=start, n=n, steps=self.steps, width=width, information=self.information)
+                    return engine.calculate(instrument, results=True)
+        return None
 
     @byBelief()
     def _byRegime(self, instrument, results=False):
@@ -124,6 +164,9 @@ class SwitchingFDEngine:
         x0 = math.log(m.S0) if logGrid else m.S0
         if (opt.isUp and x0 >= b) or (not opt.isUp and x0 <= b):
             raise ValueError("the spot is beyond the barrier")
+        if opt.isAmerican and not opt.isKnockOut:
+            raise NotImplementedError("an American knock-in is not priced: vanilla less knock-out is a European identity. "
+                                      "Price the knock-out, or the European knock-in.")
         # the vanilla on the default grid, and the knock-out on a grid truncated at the barrier node
         Big, grid, u0, _, nR = self._system(opt, self.width)
         L = (grid.x[-1] - grid.x[0]) / 2
@@ -131,18 +174,21 @@ class SwitchingFDEngine:
         BigB, gridB, u0B, _, _ = self._system(opt, ends)
         bnode = 0 if not opt.isUp else gridB.n - 1
         idx = np.array([r * gridB.n + bnode for r in range(nR)])
-        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, opt.rebate))
+        # a knock-out pays its rebate at the hit; a knock-in is the vanilla less the knock-out with no rebate, plus its
+        # own rebate, paid at expiry if the barrier was never touched
+        atHit = opt.rebate if opt.isKnockOut else 0.0
+        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, atHit))
         res = self._greeks(gridB, vOut, x0, BigB, nR)
         if opt.isKnockOut:
             return res
         vVan = self._march(Big, np.tile(u0, nR), T)
         van = self._greeks(grid, vVan, x0, Big, nR)
-        # rebate at expiry if never knocked in: solve for the survival value with a unit terminal payoff and zero at the barrier
-        reb = 0.0
-        if opt.rebate:
+        out = {k: van[k] - res[k] for k in van}
+        if opt.rebate:                                                   # the discounted probability of never hitting
             vS = self._march(BigB, np.ones(nR * gridB.n), T, fixed=(idx, 0.0))
-            reb = opt.rebate * gridB.interp(vS[self.regime * gridB.n:(self.regime + 1) * gridB.n], x0)
-        return {k: van[k] - res[k] + (reb if k == "value" else 0.0) for k in van}
+            never = self._greeks(gridB, vS, x0, BigB, nR)
+            out = {k: out[k] + opt.rebate * never[k] for k in out}
+        return out
 
     # -- options on coupon bonds and swaps, European or Bermudan, on a short-rate grid ----------------------------
     def _rateOption(self, inst):

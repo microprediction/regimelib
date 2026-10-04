@@ -39,27 +39,50 @@ def _schedule(times, name, after=None, minimum=1):
     return times
 
 
+def _stateOf(obj, depth=0):
+    """A comparable snapshot of the numbers an object holds: its own attributes and, to a few levels, those of the
+    objects it refers to (engine -> model -> chain). Caches and results (names starting with an underscore) are left
+    out, as are the diagnostics a calculation writes on the engine."""
+    if isinstance(obj, (bool, int, float, complex, str, type(None))):
+        return obj
+    if isinstance(obj, np.ndarray):
+        return ("array", obj.shape, obj.tobytes())
+    if isinstance(obj, (list, tuple)):
+        return tuple(_stateOf(v, depth) for v in obj)
+    if isinstance(obj, dict):
+        return tuple((k, _stateOf(v, depth)) for k, v in sorted(obj.items()))
+    if hasattr(obj, "__dict__") and depth < 4:
+        skip = ("averaged", "correction", "memory", "diagnostics", "orderUsed", "lastIncrement", "standardError")
+        return (type(obj).__name__,) + tuple((k, _stateOf(v, depth + 1)) for k, v in sorted(vars(obj).items())
+                                             if not k.startswith("_") and k not in skip)
+    return id(obj)                                                       # a callable (a discount curve): identity
+
+
 class Instrument:
     """QuantLib's mold: setPricingEngine, then NPV() and the greeks the engine provides (delta(), gamma(), theta(),
     vega(), rho()); a greek the engine does not compute raises, as QuantLib's "not provided" does."""
     def __init__(self):
-        self._engine = None; self._results = None
+        self._engine = None; self._results = None; self._state = None
 
     def setPricingEngine(self, engine):
-        self._engine = engine; self._results = None
+        self._engine = engine; self._results = None; self._state = None
 
     def _calculate(self):
         if self._engine is None:
             raise RuntimeError("no pricing engine set")
+        state = _stateOf((self._engine, {k: v for k, v in vars(self).items() if k not in ("_engine", "_results", "_state")}))
         self._results = self._engine.calculate(self, results=True) if hasattr(self._engine, "supportsResults") \
             else {"value": self._engine.calculate(self)}
+        self._state = state
         return self._results
 
     def NPV(self):
         return self._calculate()["value"]
 
     def _result(self, name):
-        r = self._results if self._results is not None else self._calculate()
+        # a greek read after NPV() reuses that calculation, unless the model, the engine or the contract has changed
+        current = _stateOf((self._engine, {k: v for k, v in vars(self).items() if k not in ("_engine", "_results", "_state")}))
+        r = self._results if self._results is not None and current == self._state else self._calculate()
         if name not in r:
             raise RuntimeError(f"{name} not provided by the engine")
         return r[name]
@@ -84,14 +107,15 @@ class Instrument:
             if sv == 0.0:                                                # intrinsic on the forward
                 return disc * max(F - K, 0.0) if self.isCall else disc * max(K - F, 0.0)
             d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
-            c = disc * (F * N(d1) - K * N(d2))
-            return c if self.isCall else c - disc * (F - K)
+            if self.isCall:
+                return disc * (F * N(d1) - K * N(d2))
+            return disc * (K * N(-d2) - F * N(-d1))                      # directly: parity would cancel a small put
         floor, cap = black(0.0), black(maxVol)
         slack = 1e-12 * max(1.0, abs(target))
         if target < floor - slack or target > cap + slack:
             raise ValueError(f"the price {target} is outside the Black range [{floor}, {cap}] for volatilities up to {maxVol}")
-        if target <= floor + slack:
-            return 0.0                                                   # the deterministic limit
+        if target <= floor * (1.0 + 1e-12):                              # relative to the intrinsic value: a small price
+            return 0.0                                                   # above a zero floor is a small volatility, not none
         lo = 0.0 if black(minVol) > target else minVol                   # the answer may lie below the default lower end
         return brentq(lambda v: black(v) - target, lo, maxVol, xtol=accuracy, maxiter=maxEvaluations)
 

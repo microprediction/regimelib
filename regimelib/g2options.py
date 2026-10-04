@@ -9,14 +9,17 @@ import cmath
 import numpy as np
 from ._engine.options import _kronrod_nodes
 from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable
+from ._engine.models import loadings, stable_B, ou_variance
 
 
-def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy):
-    """ExpSum forcing per regime for terminal coefficients cx, cy (complex allowed)."""
-    Dx = ExpSum({0: 1 / a, a: cx - 1 / a}); Dy = ExpSum({0: 1 / b, b: cy - 1 / b})
+def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T=None):
+    """Forcing per regime for terminal coefficients cx, cy (complex allowed) on [0, T]: exponential sums, or
+    Chebyshev series when a reversion speed is small or zero; the callables evaluate the loadings stably."""
+    (Dx, fx), (Dy, fy) = loadings([(a, cx), (b, cy)], T)
     g = [(Dx * Dx).scale(0.5 * s * s) + (Dy * Dy).scale(0.5 * e * e) + (Dx * Dy).scale(r * s * e)
          for s, e, r in zip(sigmas, etas, rhos)]
-    gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+    gfuncs = [(lambda s, e, r: (lambda t: 0.5 * s * s * fx(t) ** 2 + 0.5 * e * e * fy(t) ** 2 + r * s * e * fx(t) * fy(t)))(s, e, r)
+              for s, e, r in zip(sigmas, etas, rhos)]
     return g, gfuncs
 
 
@@ -29,8 +32,8 @@ def _g2_terminal_vectors(t, Q, a, b, sigmas, etas, rhos, cxs, cys, A0, rtol=1e-1
 
     def rhs(tau, y):
         A = (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
-        Dx = cxs * math.exp(-a * tau) + (1 - math.exp(-a * tau)) / a
-        Dy = cys * math.exp(-b * tau) + (1 - math.exp(-b * tau)) / b
+        Dx = cxs * math.exp(-a * tau) + stable_B(a, tau)
+        Dy = cys * math.exp(-b * tau) + stable_B(b, tau)
         g = 0.5 * s * s * Dx * Dx + 0.5 * e * e * Dy * Dy + r * s * e * Dx * Dy
         d = g * A + Q @ A
         return np.concatenate([d.real.ravel(), d.imag.ravel()])
@@ -46,16 +49,16 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     wv, vl = np.linalg.eig(Q.T); pi = np.real(vl[:, np.argmin(abs(wv))]); pi = pi / pi.sum()
     sig, eta, rho = map(lambda v: np.asarray(v, float), (sigmas, etas, rhos))
     tau = S - T
-    Ba, Bb = (1 - math.exp(-a * tau)) / a, (1 - math.exp(-b * tau)) / b
-    Vx = float(pi @ sig ** 2) * (1 - math.exp(-2 * a * T)) / (2 * a)
-    Vy = float(pi @ eta ** 2) * (1 - math.exp(-2 * b * T)) / (2 * b)
-    Cxy = float(pi @ (rho * sig * eta)) * (1 - math.exp(-(a + b) * T)) / (a + b)
+    Ba, Bb = stable_B(a, tau), stable_B(b, tau)
+    Vx = float(pi @ sig ** 2) * ou_variance(a, T)
+    Vy = float(pi @ eta ** 2) * ou_variance(b, T)
+    Cxy = float(pi @ (rho * sig * eta)) * ou_variance((a + b) / 2, T)
     var = Ba * Ba * Vx + Bb * Bb * Vy + 2 * Ba * Bb * Cxy
     if U is None and var > 0:
         U = 8 / math.sqrt(var)
 
     def a_vec(t, c, a0):
-        g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb)
+        g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb, t)
         if order is None:
             return numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         return FastSwitch(Q, g, order=order, a0=a0).a(t, order)

@@ -132,3 +132,17 @@ def test_zero_volatility_with_a_switching_level_is_refused():
         with pytest.raises(NotImplementedError, match="zero volatility"):
             instrument.NPV()
     assert price(rl.ZeroCouponBond(3.0), engine) > 0                              # a bond needs no inversion
+
+
+def test_deep_out_of_the_money_put_quotes_are_not_rounded_to_zero():
+    """A put far below the forward is priced directly, not as a call less the forward, which would cancel it."""
+    model = rl.SwitchingBlackScholesProcess(CHAIN, 100.0, 0.02, 0.0, 0.2)
+    engine = rl.NumericalSwitchingEngine(model)
+    F, dr, v = 100.0 * math.exp(0.02), math.exp(-0.02), 0.04
+    for K in (20.0, 21.0, 30.0):
+        d2 = (math.log(F / K) - 0.5 * v) / math.sqrt(v)
+        exact = dr * (K * N(-d2) - F * N(-d2 - math.sqrt(v)))
+        helper = rl.VolatilityHelper(1.0, K, 0.2, "put"); helper.setPricingEngine(engine)
+        assert exact > 0 and helper.marketValue() == pytest.approx(exact, rel=1e-10)
+        option = rl.VanillaOption(("put", K), maturity=1.0); option.setPricingEngine(engine)
+        assert option.impliedVolatility(price=exact) == pytest.approx(0.2, rel=1e-6)

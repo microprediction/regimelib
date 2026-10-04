@@ -29,13 +29,41 @@ def _noDiffusion(m):
     answer = "deterministic"
     for p in parts:
         zero = lambda name: not hasattr(p, name) or np.all(np.asarray(getattr(p, name), float) == 0.0)
-        if hasattr(p, "v0") or hasattr(p, "nu") or hasattr(p, "beta") or hasattr(p, "xi"):
-            return None                                                  # stochastic variance, pure jumps, CEV: not covered here
+        if hasattr(p, "nu"):
+            return None                                                  # pure jumps
+        if hasattr(p, "xi"):                                             # Heston with a switching vol-of-vol: the variance
+            if not (p.v0 == 0.0 and p.theta == 0.0):                     # stays at zero only from zero with a zero level
+                return None
+            continue
+        if hasattr(p, "v0"):
+            return None                                                  # stochastic variance
         if not (zero("sigma") and zero("eta") and zero("jumpIntensity")):
             return None
         if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1:
             answer = "switching level"
     return answer
+
+
+def deterministicEquity(m, instrument):
+    """The value of an equity contract when the price path is known, S_t = S0 e^{(r - q) t}: the discounted payoff,
+    the best exercise date for an American option, and for a barrier whether and when the path crosses it."""
+    from .instruments import BarrierOption
+    T, S0, mu = instrument.maturity, m.S0, m.r - m.q
+    path = lambda t: S0 * math.exp(mu * t)
+    pay = lambda t: math.exp(-m.r * t) * float(instrument.payoffOnGrid([path(t)])[0])
+    if isinstance(instrument, BarrierOption):
+        if getattr(instrument, "isAmerican", False):
+            raise NotImplementedError("an American barrier option on a deterministic path is not priced")
+        b, up = instrument.barrier, instrument.isUp
+        if (up and S0 >= b) or (not up and S0 <= b):
+            raise ValueError("the spot is beyond the barrier")
+        crosses = mu != 0.0 and ((up and path(T) >= b) or (not up and path(T) <= b))
+        if instrument.isKnockOut:                                        # the rebate is paid at the crossing
+            return math.exp(-m.r * math.log(b / S0) / mu) * instrument.rebate if crosses else pay(T)
+        return pay(T) if crosses else math.exp(-m.r * T) * instrument.rebate
+    if getattr(instrument, "isAmerican", False):
+        return max(pay(t) for t in np.linspace(0.0, T, 4001))
+    return pay(T)
 
 
 def _atoms(what):
@@ -151,11 +179,9 @@ class SwitchingEngine:
         elif isinstance(instrument, VanillaOption):
             out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
         elif isinstance(instrument, CouponBond):
-            out = {"value": 0.0, "delta": 0.0, "gamma": 0.0}
-            for t, c in instrument.cashflows:
-                r = self.calculate(ZeroCouponBond(t), results=True)
-                for key in out:
-                    out[key] += c * r.get(key, math.nan)
+            parts = [(c, self.calculate(ZeroCouponBond(t), results=True)) for t, c in instrument.cashflows]
+            keys = set.intersection(*(set(r) for _, r in parts))          # only what every zero-coupon bond provides
+            out = {key: sum(c * r[key] for c, r in parts) for key in ("value", "delta", "gamma") if key in keys}
         elif isinstance(instrument, ZeroCouponBondOption):
             out = {"value": self._bondOption(instrument)}
         elif isinstance(instrument, CouponBondOption):
