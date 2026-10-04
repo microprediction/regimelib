@@ -7,42 +7,42 @@ The third column of the tables says which parameters may switch; the rest are co
 Mathematics
 -----------
 
-Each model has a page with its derivation, the forcing of the reduced system and the closed form to second order
-for a two-state chain, every number checked against the numerical solution.
+Each model has a page with its dynamics, the reduction, the closed form for a two-regime chain and the Python that
+evaluates it next to the library's price: :doc:`../models/index`.
 
 .. list-table::
    :header-rows: 1
 
-   * - Model
-     - Derivation
+   * - Class
+     - Mathematics and Python
    * - ``SwitchingVasicek``
-     - `Vasicek with a switching mean level and volatility <https://homogenization.microprediction.org/regime-switching.html>`_
+     - :doc:`../models/vasicek`
    * - ``SwitchingVasicekJumps``
-     - `Vasicek with jumps at a switching intensity <https://homogenization.microprediction.org/jumps.html>`_
+     - :doc:`../models/vasicek_jumps`
    * - ``SwitchingCoxIngersollRoss``
-     - `CIR with a switching mean level <https://homogenization.microprediction.org/cir.html>`_
+     - :doc:`../models/cir`
    * - ``SwitchingHullWhite``
-     - `Hull–White with a switching volatility <https://homogenization.microprediction.org/hull-white.html>`_
+     - :doc:`../models/hull_white`
    * - ``SwitchingG2``
-     - `G2++ with switching volatilities and correlation <https://homogenization.microprediction.org/g2.html>`_
+     - :doc:`../models/g2`
    * - ``SwitchingIntensityBasket``
-     - `Two-name credit <https://homogenization.microprediction.org/credit.html>`_
+     - :doc:`../models/intensity_basket`
    * - ``SwitchingBlackScholesProcess``
-     - `Black–Scholes with a switching volatility <https://homogenization.microprediction.org/black-scholes.html>`_
+     - :doc:`../models/black_scholes`
    * - ``SwitchingMerton76Process``
-     - `Merton with a switching jump intensity <https://homogenization.microprediction.org/merton.html>`_
+     - :doc:`../models/merton`
    * - ``SwitchingVarianceGammaProcess``
-     - `Variance gamma with switching parameters <https://homogenization.microprediction.org/variance-gamma.html>`_
+     - :doc:`../models/variance_gamma`
    * - ``SwitchingHestonModel``
-     - `Heston with a switching long-run variance <https://homogenization.microprediction.org/heston.html>`_
+     - :doc:`../models/heston`
    * - ``SwitchingBatesModel``
-     - `Bates with a switching variance level and jump intensity <https://homogenization.microprediction.org/bates.html>`_
+     - :doc:`../models/bates`
    * - ``SwitchingEquityRates``
-     - `Equity options under stochastic rates <https://homogenization.microprediction.org/equity-rates.html>`_
+     - :doc:`../models/equity_rates`
    * - ``SwitchingCEVProcess``
-     - `CEV with a switching volatility <https://homogenization.microprediction.org/cev.html>`_
+     - :doc:`../models/cev`
    * - ``SwitchingHestonVolOfVol``
-     - `Heston with a switching volatility of variance <https://homogenization.microprediction.org/cycle-smile.html>`_
+     - :doc:`../models/heston_vol_of_vol`
 
 Short-rate models
 -----------------
@@ -128,8 +128,8 @@ QuantLib ``VarianceGammaProcess``; all three parameters may switch.
 
 .. function:: rl.SwitchingCEVProcess(chain, S0, r, q, sigma, beta)
 
-QuantLib ``CEVProcess`` with ``sigma`` switching; first-order tier (the switched diffusion does not commute with the
-drift). Frozen limit: ``AnalyticCEVEngine``.
+QuantLib ``CEVProcess`` with ``sigma`` switching, priced in the first-order tier on a grid. Frozen limit:
+``AnalyticCEVEngine``. Written on the forward the price is an exact mixture of CEV prices; see :doc:`../models/cev`.
 
 Hybrid models
 -------------

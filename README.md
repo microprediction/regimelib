@@ -39,25 +39,24 @@ print(opt.NPV())
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
 | `HestonProcess` with `sigma` (vol-of-vol) switching | `SwitchingHestonVolOfVol(chain, S0, r, q, v0, kappa, theta, xi, rho)` (first-order tier, 2-D grid; frozen limit against `AnalyticHestonEngine`) | `xi` |
 
-The mathematics of each model, with the derivation and the closed form to second order for a two-state chain:
+The mathematics of each model and the Python that evaluates it, on one page per model ([index](https://regimeswitching.org/python/models/index.html)):
 
-| regimelib | derivation |
+| regimelib | mathematics and Python |
 |---|---|
-| `SwitchingVasicek` | [Vasicek with a switching mean level and volatility](https://homogenization.microprediction.org/regime-switching.html) |
-| `SwitchingVasicekJumps` | [Vasicek with jumps at a switching intensity](https://homogenization.microprediction.org/jumps.html) |
-| `SwitchingCoxIngersollRoss` | [CIR with a switching mean level](https://homogenization.microprediction.org/cir.html) |
-| `SwitchingHullWhite` | [Hull–White with a switching volatility](https://homogenization.microprediction.org/hull-white.html) |
-| `SwitchingG2` | [G2++ with switching volatilities and correlation](https://homogenization.microprediction.org/g2.html) |
-| `SwitchingIntensityBasket` | [Two-name credit](https://homogenization.microprediction.org/credit.html) |
-| `SwitchingBlackScholesProcess` | [Black–Scholes with a switching volatility](https://homogenization.microprediction.org/black-scholes.html) |
-| `SwitchingMerton76Process` | [Merton with a switching jump intensity](https://homogenization.microprediction.org/merton.html) |
-| `SwitchingVarianceGammaProcess` | [Variance gamma with switching parameters](https://homogenization.microprediction.org/variance-gamma.html) |
-| `SwitchingHestonModel` | [Heston with a switching long-run variance](https://homogenization.microprediction.org/heston.html) |
-| `SwitchingBatesModel` | [Bates with a switching variance level and jump intensity](https://homogenization.microprediction.org/bates.html) |
-| `SwitchingEquityRates` | [Equity options under stochastic rates](https://homogenization.microprediction.org/equity-rates.html) |
-| `SwitchingCEVProcess` | [CEV with a switching volatility](https://homogenization.microprediction.org/cev.html) |
-| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://homogenization.microprediction.org/cycle-smile.html) |
-| instruments | [Instruments](https://homogenization.microprediction.org/instruments.html), [Options on bonds](https://homogenization.microprediction.org/bond-options.html) |
+| `SwitchingVasicek` | [Vasicek](https://regimeswitching.org/python/models/vasicek.html) |
+| `SwitchingVasicekJumps` | [Vasicek with jumps](https://regimeswitching.org/python/models/vasicek_jumps.html) |
+| `SwitchingCoxIngersollRoss` | [Cox–Ingersoll–Ross](https://regimeswitching.org/python/models/cir.html) |
+| `SwitchingHullWhite` | [Hull–White](https://regimeswitching.org/python/models/hull_white.html) |
+| `SwitchingG2` | [G2++](https://regimeswitching.org/python/models/g2.html) |
+| `SwitchingIntensityBasket` | [Intensity basket](https://regimeswitching.org/python/models/intensity_basket.html) |
+| `SwitchingBlackScholesProcess` | [Black–Scholes](https://regimeswitching.org/python/models/black_scholes.html) |
+| `SwitchingMerton76Process` | [Merton jump diffusion](https://regimeswitching.org/python/models/merton.html) |
+| `SwitchingVarianceGammaProcess` | [Variance gamma](https://regimeswitching.org/python/models/variance_gamma.html) |
+| `SwitchingHestonModel` | [Heston](https://regimeswitching.org/python/models/heston.html) |
+| `SwitchingBatesModel` | [Bates](https://regimeswitching.org/python/models/bates.html) |
+| `SwitchingEquityRates` | [Equity with stochastic rates](https://regimeswitching.org/python/models/equity_rates.html) |
+| `SwitchingCEVProcess` | [CEV](https://regimeswitching.org/python/models/cev.html) |
+| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://regimeswitching.org/python/models/heston_vol_of_vol.html) |
 
 Instruments, with the QuantLib engine that the frozen limit is checked against:
 
