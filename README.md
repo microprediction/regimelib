@@ -39,6 +39,26 @@ print(opt.NPV())
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
 | `HestonProcess` with `sigma` (vol-of-vol) switching | `SwitchingHestonVolOfVol(chain, S0, r, q, v0, kappa, theta, xi, rho)` (first-order tier, 2-D grid; frozen limit against `AnalyticHestonEngine`) | `xi` |
 
+The mathematics of each model, with the derivation and the closed form to second order for a two-state chain:
+
+| regimelib | derivation |
+|---|---|
+| `SwitchingVasicek` | [Vasicek with a switching mean level and volatility](https://homogenization.microprediction.org/regime-switching.html) |
+| `SwitchingVasicekJumps` | [Vasicek with jumps at a switching intensity](https://homogenization.microprediction.org/jumps.html) |
+| `SwitchingCoxIngersollRoss` | [CIR with a switching mean level](https://homogenization.microprediction.org/cir.html) |
+| `SwitchingHullWhite` | [Hull–White with a switching volatility](https://homogenization.microprediction.org/hull-white.html) |
+| `SwitchingG2` | [G2++ with switching volatilities and correlation](https://homogenization.microprediction.org/g2.html) |
+| `SwitchingIntensityBasket` | [Two-name credit](https://homogenization.microprediction.org/credit.html) |
+| `SwitchingBlackScholesProcess` | [Black–Scholes with a switching volatility](https://homogenization.microprediction.org/black-scholes.html) |
+| `SwitchingMerton76Process` | [Merton with a switching jump intensity](https://homogenization.microprediction.org/merton.html) |
+| `SwitchingVarianceGammaProcess` | [Variance gamma with switching parameters](https://homogenization.microprediction.org/variance-gamma.html) |
+| `SwitchingHestonModel` | [Heston with a switching long-run variance](https://homogenization.microprediction.org/heston.html) |
+| `SwitchingBatesModel` | [Bates with a switching variance level and jump intensity](https://homogenization.microprediction.org/bates.html) |
+| `SwitchingEquityRates` | [Equity options under stochastic rates](https://homogenization.microprediction.org/equity-rates.html) |
+| `SwitchingCEVProcess` | [CEV with a switching volatility](https://homogenization.microprediction.org/cev.html) |
+| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://homogenization.microprediction.org/cycle-smile.html) |
+| instruments | [Instruments](https://homogenization.microprediction.org/instruments.html), [Options on bonds](https://homogenization.microprediction.org/bond-options.html) |
+
 Instruments, with the QuantLib engine that the frozen limit is checked against:
 
 | QuantLib | regimelib | engine |

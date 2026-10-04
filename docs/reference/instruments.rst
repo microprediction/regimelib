@@ -1,6 +1,9 @@
 Instruments
 ===========
 
+The formulas behind each instrument are on the `instruments page <https://homogenization.microprediction.org/instruments.html>`_ and, for options on
+zero-coupon bonds, the `bond options page <https://homogenization.microprediction.org/bond-options.html>`_.
+
 Instruments accept QuantLib payoff and exercise objects or plain tuples. Each entry names the QuantLib engine its
 frozen limit is checked against.
 

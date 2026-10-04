@@ -28,3 +28,4 @@ Two things the library holds itself to:
 
 The mathematics — the recursion, the initial layers, the Green–Kubo matrix for a non-reversible chain, the survival
 and bond formulas it started from — is on `homogenization.microprediction.org <https://homogenization.microprediction.org>`_.
+Each model's own derivation is linked from :doc:`reference/models`, and the instruments from :doc:`reference/instruments`.
