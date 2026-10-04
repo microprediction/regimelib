@@ -187,35 +187,45 @@ division by :math:`2\lambda`, and ``NumericalSwitchingEngine`` solves the linear
 Adding jumps
 ------------
 
-There are two ways to add jumps and keep a closed form. The first is a jump in the state at an intensity
-:math:`\ell_i` that depends on the regime. Its term in the pricing equation is
-:math:`\ell_i\,\mathbb{E}[u_i(x + J) - u_i(x)]`, and on an exponential-affine solution :math:`e^{-B(t)x}a_i(t)` a jump
-of size :math:`J` only multiplies by :math:`e^{-BJ}`. The term therefore becomes
-:math:`\ell_i\,(\mathbb{E}[e^{-B(t)J}] - 1)`, a function of time added to the forcing :math:`g_i`. Any jump law with a
-known transform will do, the intensity may switch, and so may the law itself, by giving each regime its own
-transform. This covers :doc:`vasicek_jumps`, :doc:`merton` and :doc:`bates`. A pure-jump Lévy model is the same
-statement with nothing else in it: :math:`g_i` is the regime's Lévy exponent, so every parameter may switch, as in
-:doc:`variance_gamma`, and the same holds for any Lévy process whose exponent is known. When the state coefficient
-does not depend on time, as for an equity characteristic function, the forcing is constant and the two-regime
-solution is exact. The one restriction is that the jump must not put a switched parameter into the Riccati
-equation: an intensity proportional to the state does, and then only its constant part may switch.
+A regime switch is already a jump, in a parameter: the volatility, the level a rate reverts to, or the long-run
+variance moves at once to a new value, while the stock price or the rate itself stays continuous. Two further kinds
+of jump move the price or the rate itself, and both keep a closed form.
 
-The second is a jump that happens at the moment the regime changes. If a move from regime :math:`i` to :math:`j`
-shifts the state by a random amount :math:`J_{ij}`, the switching term :math:`Q_{ij}u_j` becomes
-:math:`Q_{ij}\,\mathbb{E}[u_j(x + J_{ij})]`, and the same factorisation multiplies each off-diagonal rate by a
-transform: :math:`a' = (Q\circ\Phi(t) + \operatorname{diag} g)\,a` with :math:`\Phi_{ij} = \mathbb{E}[e^{-B(t)J_{ij}}]`
-and :math:`\Phi_{ii} = 1`. The system is still linear, and for two regimes with constant :math:`g` and
-:math:`\Phi` it is still exact,
+**The price or the rate jumps at random times, more often in one regime than the other.** Examples: a stock price
+that drops by a lognormal factor at Poisson times, twice a year in a stressed regime and once in five years in a
+calm one (:doc:`merton`, and :doc:`bates` when the variance is also stochastic); a short rate or a default
+intensity that jumps upward by an exponential amount, three times a year in one regime and rarely in the other
+(:doc:`vasicek_jumps`); a stock price that moves only by jumps, with its skew and kurtosis set by the regime
+(:doc:`variance_gamma`). In each case the jump adds one term to the forcing, the regime's jump rate times the
+transform of the jump size less one:
 
 .. math::
 
-    a_1(T) = e^{(\bar g - \lambda)T}\Big(\cosh sT + \frac{\tilde g + \lambda\Phi_{12}}{s}\,\sinh sT\Big), \qquad
+    \text{rate jumps by } J:\quad \ell_i\,\big(\mathbb{E}[e^{-B(t)J}] - 1\big), \qquad\qquad
+    \text{log price jumps by } J:\quad \ell_i\,\big(\mathbb{E}[e^{iuJ}] - 1 - iu\bar k\big).
+
+Any jump-size law with a known transform will do. The jump rate may switch, and so may the size law, by giving each
+regime its own transform. For a stock the term is constant in time, so the two-regime characteristic function is
+exact. The one restriction is that a jump rate proportional to the rate or the variance itself enters the Riccati
+equation, and then only its constant part may switch.
+
+**The price or the rate jumps at the moment the regime changes.** Examples: the stock falls five percent on entry
+to the crisis regime and recovers part of it on exit; the short rate steps down fifty basis points when the regime
+turns to easing. If a move from regime :math:`i` to :math:`j` shifts the log price or the rate by a random amount
+:math:`J_{ij}`, each off-diagonal switching rate is multiplied by the transform of that jump,
+:math:`\Phi_{ij} = \mathbb{E}[e^{iuJ_{ij}}]` for a log price and :math:`\mathbb{E}[e^{-B(t)J_{ij}}]` for a rate, and
+the system is :math:`a' = (Q\circ\Phi + \operatorname{diag} g)\,a`. It is still linear, and for a stock with two
+regimes it is still exact:
+
+.. math::
+
+    \phi_1(u) = e^{(\bar g - \lambda)T}\Big(\cosh sT + \frac{\tilde g + \lambda\Phi_{12}}{s}\,\sinh sT\Big), \qquad
     s = \sqrt{\tilde g^2 + \lambda^2\,\Phi_{12}\Phi_{21}},
 
-with :math:`a_2` given by exchanging the regimes. What changes is the expansion. These jumps arrive at the switching
-rate, so as the chain speeds up they pile up unless their size shrinks with the holding time, and
-:math:`Q\circ\Phi` is not a generator, so the averaged model is not simply the model at the averaged parameters. The
-library implements the first kind and not the second.
+with :math:`\phi_2` given by exchanging the regimes. What changes is the expansion: these jumps arrive at the
+switching rate, so as the chain speeds up they pile up unless their size shrinks with the holding time, and the
+averaged model is no longer the model at the averaged parameters. The library implements the first kind and not
+this one.
 
 .. toctree::
    :maxdepth: 1
