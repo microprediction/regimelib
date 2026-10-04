@@ -4,6 +4,46 @@ Pricing models
 Each model is QuantLib's model with a ``chain`` in front of the parameters and a list where a parameter may switch.
 The third column of the tables says which parameters may switch; the rest are common to all regimes.
 
+Mathematics
+-----------
+
+Each model has a page with its derivation, the forcing of the reduced system and the closed form to second order
+for a two-state chain, every number checked against the numerical solution.
+
+.. list-table::
+   :header-rows: 1
+
+   * - Model
+     - Derivation
+   * - ``SwitchingVasicek``
+     - `Vasicek with a switching mean level and volatility <https://homogenization.microprediction.org/regime-switching.html>`_
+   * - ``SwitchingVasicekJumps``
+     - `Vasicek with jumps at a switching intensity <https://homogenization.microprediction.org/jumps.html>`_
+   * - ``SwitchingCoxIngersollRoss``
+     - `CIR with a switching mean level <https://homogenization.microprediction.org/cir.html>`_
+   * - ``SwitchingHullWhite``
+     - `Hull–White with a switching volatility <https://homogenization.microprediction.org/hull-white.html>`_
+   * - ``SwitchingG2``
+     - `G2++ with switching volatilities and correlation <https://homogenization.microprediction.org/g2.html>`_
+   * - ``SwitchingIntensityBasket``
+     - `Two-name credit <https://homogenization.microprediction.org/credit.html>`_
+   * - ``SwitchingBlackScholesProcess``
+     - `Black–Scholes with a switching volatility <https://homogenization.microprediction.org/black-scholes.html>`_
+   * - ``SwitchingMerton76Process``
+     - `Merton with a switching jump intensity <https://homogenization.microprediction.org/merton.html>`_
+   * - ``SwitchingVarianceGammaProcess``
+     - `Variance gamma with switching parameters <https://homogenization.microprediction.org/variance-gamma.html>`_
+   * - ``SwitchingHestonModel``
+     - `Heston with a switching long-run variance <https://homogenization.microprediction.org/heston.html>`_
+   * - ``SwitchingBatesModel``
+     - `Bates with a switching variance level and jump intensity <https://homogenization.microprediction.org/bates.html>`_
+   * - ``SwitchingEquityRates``
+     - `Equity options under stochastic rates <https://homogenization.microprediction.org/equity-rates.html>`_
+   * - ``SwitchingCEVProcess``
+     - `CEV with a switching volatility <https://homogenization.microprediction.org/cev.html>`_
+   * - ``SwitchingHestonVolOfVol``
+     - `Heston with a switching volatility of variance <https://homogenization.microprediction.org/cycle-smile.html>`_
+
 Short-rate models
 -----------------
 
