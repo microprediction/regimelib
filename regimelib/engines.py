@@ -10,6 +10,7 @@ from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, Co
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .chain import stateIndex
 from .g2options import g2_zcb_call
 from .hybrid import SwitchingEquityRates
 
@@ -17,6 +18,16 @@ from .hybrid import SwitchingEquityRates
 def _gauss(U, n):
     x, w = np.polynomial.legendre.leggauss(n)
     return (x + 1) * U / 2, w * U / 2
+
+
+def _expansionOrder(value, name, allowNone=False):
+    """An expansion order is a nonnegative integer (or None for the adaptive order)."""
+    import numbers
+    if value is None and allowNone:
+        return None
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 0:
+        raise ValueError(f"{name} must be {'None or ' if allowNone else ''}a non-negative integer, got {value!r}")
+    return int(value)
 
 
 class ExpansionWarning(UserWarning):
@@ -39,7 +50,7 @@ class SwitchingEngine:
     supportsResults = True
 
     def __init__(self, model, regime=0, nodes=96):
-        self.model, self.regime, self.nodes = model, regime, nodes
+        self.model, self.regime, self.nodes = model, stateIndex(regime, model.n), nodes
         self._memo = {}                                       # (fingerprint, T, u) -> terminal data, shared across strikes
 
     def _fingerprint(self):
@@ -89,7 +100,7 @@ class SwitchingEngine:
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
             if instrument.regimeAtMaturity is not None:
-                a0 = np.zeros(m.n); a0[instrument.regimeAtMaturity] = 1.0
+                a0 = np.zeros(m.n); a0[stateIndex(instrument.regimeAtMaturity, m.n, "regimeAtMaturity")] = 1.0
             P = float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
             out = {"value": P}
             B = self._bondB(T)
@@ -342,6 +353,7 @@ class FastSwitchingEngine(SwitchingEngine):
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
     def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12):
         super().__init__(model, regime, nodes)
+        order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
 

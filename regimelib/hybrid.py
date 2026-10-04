@@ -22,6 +22,12 @@ class SwitchingEquityRates(SwitchingModel):
     def __init__(self, equity, rates, rho=0.0):
         if equity.chain is not rates.chain:
             raise ValueError("the equity and the rates must share one RegimeChain instance")
+        if not (callable(getattr(equity, "returnForcing", None)) and hasattr(equity, "S0") and hasattr(equity, "q")):
+            raise TypeError("the equity must be a model with a characteristic function (returnForcing, S0 and q); "
+                            f"{type(equity).__name__} has none")
+        rho = float(rho)
+        if not math.isfinite(rho) or abs(rho) > 1.0:
+            raise ValueError("rho must be finite and between -1 and 1")
         if not isinstance(rates, (SwitchingVasicek, SwitchingHullWhite)):
             raise TypeError("rates must be SwitchingVasicek or SwitchingHullWhite")
         if rho and not isinstance(equity, SwitchingBlackScholesProcess):

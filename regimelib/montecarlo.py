@@ -6,6 +6,7 @@ import math
 import numpy as np
 from .instruments import ZeroCouponBond, VanillaOption, rejectFeatures
 from .models import SwitchingVasicek, SwitchingBlackScholesProcess
+from .chain import stateIndex
 
 
 def _N(x):
@@ -14,7 +15,10 @@ def _N(x):
 
 class MonteCarloSwitchingEngine:
     def __init__(self, model, regime=0, paths=100000, seed=0):
-        self.model, self.regime, self.paths, self.seed = model, regime, int(paths), seed
+        import numbers
+        if isinstance(paths, bool) or not isinstance(paths, numbers.Integral) or paths < 2:
+            raise ValueError(f"paths must be an integer of at least 2, so that a standard error exists; got {paths!r}")
+        self.model, self.regime, self.paths, self.seed = model, stateIndex(regime, model.n), int(paths), seed
         self.standardError = None
 
     def _paths(self, T):
