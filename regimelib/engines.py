@@ -9,6 +9,7 @@ Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher ord
 from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap, rejectFeatures
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
+from ._engine.models import stable_B, cir_B
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
 from .chain import stateIndex
 from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
@@ -267,10 +268,9 @@ class SwitchingEngine:
     def _bondB(self, T):
         m = self.model
         if isinstance(m, SwitchingVasicek) or hasattr(m, "jumpMean"):
-            return (1 - math.exp(-m.a * T)) / m.a
+            return stable_B(m.a, T)
         if hasattr(m, "k") and hasattr(m, "theta") and not hasattr(m, "S0"):      # CIR
-            h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1
-            return 2 * ex / ((h + m.k) * ex + 2 * h)
+            return cir_B(m.k, m.sigma, T)
         return None
 
     def _bondOption(self, opt):
@@ -280,8 +280,7 @@ class SwitchingEngine:
         elif isinstance(m, SwitchingHullWhite):
             # r = x + phi(t): P(T, S) = c P_x(T, S) with c = exp(-int_T^S phi), and the discount to T carries
             # exp(-int_0^T phi), so the call is exp(-int_0^T phi) c Call_x(strike K / c) under the zero-mean factor.
-            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
-            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T)); c = m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))
             call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
         elif isinstance(m, SwitchingG2):
@@ -301,8 +300,7 @@ class SwitchingEngine:
         if isinstance(m, SwitchingVasicek):
             call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
         elif isinstance(m, SwitchingHullWhite):
-            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
-            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T))
             scaled = [(S, c * m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))) for S, c in cashflows]
             call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
