@@ -385,8 +385,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
         Lbar = (sp.diags(self.r - self.q - 0.5 * grid.V) @ grid.d1x + 0.5 * V @ grid.d2x
                 + sp.diags(self.kappa * (self.theta - grid.V)) @ grid.d1v + xi2bar * A1 + xibar * A2 - self.r * I)
-        S = np.exp(grid.X)
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(np.exp(grid.X))
         return Lbar, [A1, A2], [xi ** 2, xi], grid, u0, (x0, self.v0)
 
 
@@ -463,5 +462,5 @@ class SwitchingCEVProcess(SwitchingModel):
         D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
         A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
         Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(S)
         return Lbar, [A], [s2], grid, u0, self.S0

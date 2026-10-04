@@ -6,7 +6,7 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap, rejectFeatures
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
@@ -78,6 +78,13 @@ class SwitchingEngine:
 
     def calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
+        if isinstance(instrument, VanillaOption):                       # the transforms below are of the terminal value
+            rejectFeatures(instrument, "the characteristic-function engine", ("American exercise", "a barrier"),
+                           "SwitchingFDEngine")
+        if isinstance(instrument, Swaption) and instrument.exerciseTimes is not None and (
+                len(instrument.exerciseTimes) > 1 or abs(instrument.exerciseTimes[0] - T) > 1e-12):
+            raise TypeError("the characteristic-function engine prices European swaptions; "
+                            "use SwitchingFDEngine for Bermudan exercise")
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None

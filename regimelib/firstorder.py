@@ -10,7 +10,9 @@ import warnings
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
-from .instruments import VanillaOption
+from .instruments import VanillaOption, rejectFeatures
+
+_PATH_FEATURES = ("American exercise", "a barrier", "geometric averaging")
 
 
 def green_kubo(chain, f):
@@ -114,6 +116,7 @@ class FirstOrderFDEngine:
     def calculate(self, instrument):
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the first-order finite-difference engine prices vanilla options")
+        rejectFeatures(instrument, "the first-order finite-difference engine", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         K, M = green_kubo(m.chain, f)
@@ -143,6 +146,9 @@ class SwitchingFDReferee:
         self.model, self.regime, self.n, self.width, self.stretch = model, regime, n, width, stretch
 
     def calculate(self, instrument):
+        if not isinstance(instrument, VanillaOption):
+            raise TypeError("the switching finite-difference referee prices vanilla options")
+        rejectFeatures(instrument, "the switching finite-difference referee", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         f = np.atleast_2d(np.asarray(f, float)); pi = m.chain.stationaryDistribution(); nR = m.n

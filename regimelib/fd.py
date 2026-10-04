@@ -9,7 +9,7 @@ import math
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
-from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption
+from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption, rejectFeatures
 
 
 class SwitchingFDEngine:
@@ -79,6 +79,8 @@ class SwitchingFDEngine:
             return out if results else out["value"]
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the switching finite-difference engine prices vanilla, American, barrier and Bermudan instruments")
+        rejectFeatures(instrument, "the switching finite-difference engine", ("geometric averaging",),
+                       "NumericalSwitchingEngine or FastSwitchingEngine")
         if isinstance(instrument, BarrierOption):
             out = self._barrier(instrument)
         else:

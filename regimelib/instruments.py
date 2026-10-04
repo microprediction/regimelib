@@ -47,6 +47,10 @@ class Instrument:
         from scipy.optimize import brentq
         if getattr(self, "payoffType", "vanilla") != "vanilla":
             raise RuntimeError("implied volatility is defined for plain vanilla payoffs")
+        features = contractFeatures(self)
+        if features:                                                    # the Black formula below is European and vanilla
+            raise NotImplementedError("implied volatility inverts the European Black formula and does not apply to "
+                                      + " or ".join(features))
         m = self._engine.model; T, K = self.maturity, self.strike
         F, disc = m.forward(T), math.exp(-m.r * T)
         target = self.NPV() if price is None else price
@@ -136,6 +140,26 @@ class ContinuousGeometricAsianOption(VanillaOption):
         super().__init__(payoff, exercise, maturity, dayCounter)
         if self.payoffType != "vanilla" or self.isAmerican:
             raise ValueError("the geometric Asian option is European with a plain payoff")
+
+
+def contractFeatures(instrument):
+    """What a VanillaOption carries beyond a European terminal payoff, by name. Barrier and Asian options are
+    subclasses of VanillaOption, so an engine that only looks at strike and call/put would price them as vanilla."""
+    features = []
+    if getattr(instrument, "isAmerican", False):
+        features.append("American exercise")
+    if isinstance(instrument, BarrierOption):
+        features.append("a barrier")
+    if isinstance(instrument, ContinuousGeometricAsianOption):
+        features.append("geometric averaging")
+    return features
+
+
+def rejectFeatures(instrument, engine, unsupported, use):
+    """Raise rather than drop a contract feature the engine has no algorithm for."""
+    bad = [f for f in contractFeatures(instrument) if f in unsupported]
+    if bad:
+        raise TypeError(f"{engine} does not price {' or '.join(bad)}; use {use}")
 
 
 class CouponBond(Instrument):
