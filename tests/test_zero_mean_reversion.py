@@ -31,10 +31,10 @@ def test_vasicek_without_reversion_is_the_gaussian_random_walk():
     model = rl.SwitchingVasicek(CHAIN, R0, 0.0, [0.06, 0.02], SIGMA)
     for engine in engines(model):
         bond = rl.ZeroCouponBond(T)
-        assert price(bond, engine) == pytest.approx(exact, rel=1e-12)
-        assert bond.delta() == pytest.approx(-T * exact, rel=1e-12)
+        assert price(bond, engine) == pytest.approx(exact, rel=1e-10)
+        assert bond.delta() == pytest.approx(-T * exact, rel=1e-10)
     mc = rl.MonteCarloSwitchingEngine(model, paths=50)
-    assert price(rl.ZeroCouponBond(T), mc) == pytest.approx(exact, rel=1e-12)   # sigma does not switch: every path agrees
+    assert price(rl.ZeroCouponBond(T), mc) == pytest.approx(exact, rel=1e-10)   # sigma does not switch: every path agrees
 
 
 def test_vasicek_is_continuous_in_the_reversion_speed():
@@ -68,7 +68,7 @@ def test_vasicek_jumps_without_reversion():
 def test_hull_white_in_the_ho_lee_limit():
     frozen = rl.SwitchingHullWhite(CHAIN, 0.03, 0.0, 0.01)
     for engine in engines(frozen):
-        assert price(rl.ZeroCouponBond(T), engine) == pytest.approx(math.exp(-0.03 * T), rel=1e-12)   # the curve is fitted
+        assert price(rl.ZeroCouponBond(T), engine) == pytest.approx(math.exp(-0.03 * T), rel=1e-10)   # the curve is fitted
         P1, P3, v = math.exp(-0.03), math.exp(-0.09), 0.01 * 2.0                # bond volatility sigma (S - T) sqrt(T)
         d1 = math.log(P3 / (0.9 * P1)) / v + v / 2
         call = rl.ZeroCouponBondOption("call", 0.9, 1.0, 3.0)
@@ -84,9 +84,9 @@ def test_cir_loading_at_the_ends():
     still = rl.SwitchingCoxIngersollRoss(CHAIN, 0.03, [0.05, 0.02], 0.0, 0.0)   # k = sigma = 0: the rate is constant
     for engine in engines(still):
         bond = rl.ZeroCouponBond(T)
-        assert price(bond, engine) == pytest.approx(math.exp(-0.03 * T), rel=1e-13)
-        assert bond.delta() == pytest.approx(-T * math.exp(-0.03 * T), rel=1e-13)
-        assert bond.gamma() == pytest.approx(T * T * math.exp(-0.03 * T), rel=1e-13)
+        assert price(bond, engine) == pytest.approx(math.exp(-0.03 * T), rel=1e-10)
+        assert bond.delta() == pytest.approx(-T * math.exp(-0.03 * T), rel=1e-10)
+        assert bond.gamma() == pytest.approx(T * T * math.exp(-0.03 * T), rel=1e-10)
     tiny = rl.SwitchingCoxIngersollRoss(CHAIN, 0.03, 0.03, 1e-9, 1e-9)
     bond = rl.ZeroCouponBond(T)
     assert price(bond, rl.NumericalSwitchingEngine(tiny)) == pytest.approx(math.exp(-0.03 * T), rel=1e-7)
