@@ -14,6 +14,8 @@ class VolatilityHelper:
     def __init__(self, maturity, strike, volatility, kind="call", dayCounter=None):
         self.option = VanillaOption((kind, strike), maturity=maturity, dayCounter=dayCounter)
         self.volatility = float(volatility); self._engine = None
+        if not math.isfinite(self.volatility) or self.volatility < 0:
+            raise ValueError(f"volatility must be finite and nonnegative, got {self.volatility}")
 
     def setPricingEngine(self, engine):
         self._engine = engine; self.option.setPricingEngine(engine)
@@ -21,6 +23,8 @@ class VolatilityHelper:
     def _black(self, vol):
         m = self._engine.model; T, K = self.option.maturity, self.option.strike
         F, disc = m.forward(T), math.exp(-m.r * T); sv = vol * math.sqrt(T)
+        if sv == 0.0:                                                    # no time or no volatility: intrinsic on the forward
+            return disc * max(F - K, 0.0) if self.option.isCall else disc * max(K - F, 0.0)
         N = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
         d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; c = disc * (F * N(d1) - K * N(d1 - sv))
         return c if self.option.isCall else c - disc * (F - K)
@@ -35,8 +39,9 @@ class VolatilityHelper:
         return self.option.impliedVolatility()
 
     def calibrationError(self):
-        """Relative price error, as QuantLib's RelativePriceError."""
-        return self.modelValue() / self.marketValue() - 1.0
+        """Relative price error, as QuantLib's RelativePriceError; the absolute error when the market value is zero."""
+        market = self.marketValue()
+        return self.modelValue() - market if market == 0.0 else self.modelValue() / market - 1.0
 
     def volatilityError(self):
         return self.impliedVolatility() - self.volatility

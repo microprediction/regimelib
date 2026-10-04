@@ -21,6 +21,28 @@ def _gauss(U, n):
     return (x + 1) * U / 2, w * U / 2
 
 
+def _noDiffusion(m):
+    """None when the model diffuses or jumps. Otherwise "deterministic" if the path of the state is then known, or
+    "switching level" if a level still switches, in which case the state at a future date has atoms."""
+    parts = [m.equity, m.rates] if isinstance(m, SwitchingEquityRates) else [m]
+    answer = "deterministic"
+    for p in parts:
+        zero = lambda name: not hasattr(p, name) or np.all(np.asarray(getattr(p, name), float) == 0.0)
+        if hasattr(p, "v0") or hasattr(p, "nu") or hasattr(p, "beta") or hasattr(p, "xi"):
+            return None                                                  # stochastic variance, pure jumps, CEV: not covered here
+        if not (zero("sigma") and zero("eta") and zero("jumpIntensity")):
+            return None
+        if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1:
+            answer = "switching level"
+    return answer
+
+
+def _atoms(what):
+    return NotImplementedError(
+        f"{what} with zero volatility and a switching level: the rate at expiry takes values with positive probability, "
+        "which the Fourier inversion does not resolve. Give the rate a volatility, or freeze the level.")
+
+
 def _expansionOrder(value, name, allowNone=False):
     """An expansion order is a nonnegative integer (or None for the adaptive order)."""
     import numbers
@@ -161,6 +183,7 @@ class SwitchingEngine:
         if not math.isfinite(T) or T < 0:
             raise ValueError(f"the maturity must be finite and nonnegative, got {T}")
         bond = lambda t: 1.0 if t == 0 else self.calculate(ZeroCouponBond(t))
+        still = _noDiffusion(m)                                          # None, "deterministic" or "switching level"
         if isinstance(instrument, ZeroCouponBond):
             if T > 0:
                 return None
@@ -173,6 +196,11 @@ class SwitchingEngine:
                 return {"value": max(bond(S) - K, 0.0) if instrument.isCall else max(K - bond(S), 0.0)}
             if K <= 0:
                 return {"value": bond(S) - K * bond(T) if instrument.isCall else 0.0}
+            if still == "deterministic":                                 # P(T, S) = P(0, S) / P(0, T) is known today
+                value = bond(S) - K * bond(T)
+                return {"value": max(value, 0.0) if instrument.isCall else max(-value, 0.0)}
+            if still:
+                raise _atoms("an option on a bond")
             return None
         if isinstance(instrument, (CouponBondOption, Swaption)):
             isCall, K = ((instrument.isCall, instrument.strike) if isinstance(instrument, CouponBondOption)
@@ -182,6 +210,11 @@ class SwitchingEngine:
                 if T == 0:
                     return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
                 return {"value": value if isCall else 0.0}
+            if still == "deterministic":
+                value = sum(c * bond(S) for S, c in instrument.cashflows) - K * bond(T)
+                return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+            if still:
+                raise _atoms("an option on a coupon bond or a swap")
             return None
         if not isinstance(instrument, VanillaOption):
             return None
@@ -189,6 +222,9 @@ class SwitchingEngine:
         if isinstance(instrument, ContinuousGeometricAsianOption):
             if T == 0:                                                   # the average of a single point
                 return {"value": float(instrument.payoffOnGrid([S0])[0])}
+            if still == "deterministic" and K > 0:                       # log S is linear in t: its average is at T / 2
+                G = S0 * math.exp((m.r - m.q) * T / 2)
+                return {"value": math.exp(-m.r * T) * float(instrument.payoffOnGrid([G])[0])}
             return None                                                  # a nonpositive strike is handled with the forward of the average
         if T == 0:
             value = float(instrument.payoffOnGrid([S0])[0])
@@ -210,6 +246,17 @@ class SwitchingEngine:
                 return {"value": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "rho": 0.0}
             return {"value": S0 * dq - K * dr, "delta": dq, "gamma": 0.0, "theta": m.q * S0 * dq - m.r * K * dr,
                     "rho": T * K * dr}
+        if still == "deterministic":                                     # the terminal price is known: discounted payoff
+            if isinstance(m, SwitchingEquityRates):                      # S_T = S0 e^{-qT} / P(0, T)
+                P = self._hybridBond(T); value = S0 * math.exp(-m.q * T) - K * P
+                return {"value": max(value, 0.0) if call else max(-value, 0.0)}
+            dq, dr = math.exp(-m.q * T), math.exp(-m.r * T); F = m.forward(T)
+            if instrument.payoffType != "vanilla":
+                return {"value": dr * float(instrument.payoffOnGrid([F])[0])}
+            side = 1.0 if call else -1.0
+            inside = 1.0 if side * (F - K) > 0 else (0.5 if F == K else 0.0)
+            return {"value": max(side * (S0 * dq - K * dr), 0.0), "delta": side * inside * dq, "gamma": 0.0,
+                    "theta": side * inside * (m.q * S0 * dq - m.r * K * dr), "rho": side * inside * T * K * dr}
         return None
 
     def _hybridBond(self, T):
@@ -411,6 +458,9 @@ class SwitchingEngine:
     def _riccatiD(m, u, T):
         """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates) and its T-derivative
         from the Riccati equation D' = xi^2 D^2 / 2 + (rho xi i u - kappa) D - (u^2 + i u) / 2."""
+        if m.sigma == 0.0:                                               # the variance is deterministic: D' = -kappa D - (u^2 + iu)/2
+            D = -0.5 * (u * u + 1j * u) * (1 - cmath.exp(-m.kappa * T)) / m.kappa
+            return D, -m.kappa * D - 0.5 * (u * u + 1j * u)
         d = cmath.sqrt((m.rho * m.sigma * 1j * u - m.kappa) ** 2 + m.sigma ** 2 * (1j * u + u * u))
         gm = (m.kappa - m.rho * m.sigma * 1j * u - d) / (m.kappa - m.rho * m.sigma * 1j * u + d)
         e = cmath.exp(-d * T)

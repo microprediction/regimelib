@@ -80,6 +80,8 @@ def heston_switching_theta(u, kappa, thetas, xi, rho, T):
     gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
 
     def D(t):
+        if xi == 0.0:                         # no vol-of-vol: the Riccati equation is linear, D' = -kappa D - (u^2 + iu)/2
+            return -0.5 * (u * u + 1j * u) * (1 - cmath.exp(-kappa * t)) / kappa
         e = cmath.exp(-d * t)
         return (kappa - rho * xi * 1j * u - d) / xi ** 2 * (1 - e) / (1 - gm * e)
     gfuncs = [(lambda th: (lambda t: kappa * th * D(t)))(th) for th in thetas]

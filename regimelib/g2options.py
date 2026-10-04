@@ -51,7 +51,7 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     Vy = float(pi @ eta ** 2) * (1 - math.exp(-2 * b * T)) / (2 * b)
     Cxy = float(pi @ (rho * sig * eta)) * (1 - math.exp(-(a + b) * T)) / (a + b)
     var = Ba * Ba * Vx + Bb * Bb * Vy + 2 * Ba * Bb * Cxy
-    if U is None:
+    if U is None and var > 0:
         U = 8 / math.sqrt(var)
 
     def a_vec(t, c, a0):
@@ -60,6 +60,11 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
             return numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         return FastSwitch(Q, g, order=order, a0=a0).a(t, order)
     A = np.asarray(a_vec(tau, 0.0, np.ones(m))).real                    # bond factors at expiry per regime
+    if var < -1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy):
+        raise ValueError("the factor covariance is not positive semidefinite")
+    if var <= 1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy) or var == 0.0:
+        # B_a x_T + B_b y_T has no variance (no volatility, or exact cancellation): the bond at expiry is A_j in regime j
+        return float(sum(max(A[j] - K, 0.0) * np.asarray(a_vec(T, 0.0, np.eye(m)[j]))[start].real for j in range(m)))
     zstar = [math.log(A[j] / K) for j in range(m)]
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((1.0, A[j]), (0.0, -K))]
     price = 0.0
