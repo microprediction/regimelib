@@ -12,8 +12,30 @@ from ._engine import quantlib_models as _q
 from ._engine.fastswitch import ExpSum, Cheb
 
 
-def _per_regime(x, n):
-    return [float(x)] * n if np.isscalar(x) else [float(v) for v in x]
+def _per_regime(x, n, name="parameter"):
+    """A scalar is shared by every regime; a sequence must have one entry per regime."""
+    if np.isscalar(x):
+        return [float(x)] * n
+    values = [float(v) for v in x]
+    if len(values) != n:
+        raise ValueError(f"{name} must be a scalar or have exactly {n} entries, one per regime; got {len(values)}")
+    return values
+
+
+def _check(values, name, ok, requirement):
+    """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
+    for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
+        if not (math.isfinite(v) and ok(v)):
+            where = f" (regime {i})" if np.ndim(values) else ""
+            raise ValueError(f"{name} must be {requirement}; got {v}{where}")
+
+
+def _nonnegative(values, name):
+    _check(values, name, lambda v: v >= 0.0, "finite and nonnegative")
+
+
+def _correlation(values, name="rho"):
+    _check(values, name, lambda v: abs(v) <= 1.0, "finite and between -1 and 1")
 
 
 class SwitchingModel:
@@ -28,7 +50,7 @@ class SwitchingVasicek(SwitchingModel):
     def __init__(self, chain, r0, a, b, sigma):
         super().__init__(chain)
         self.r0, self.a = float(r0), float(a)
-        self.b, self.sigma = _per_regime(b, self.n), _per_regime(sigma, self.n)
+        self.b, self.sigma = _per_regime(b, self.n, "b"), _per_regime(sigma, self.n, "sigma")
 
     def bondForcing(self, T):
         rhos = [[[1.0]]] * self.n
@@ -77,8 +99,10 @@ class SwitchingVasicekJumps(SwitchingModel):
     def __init__(self, chain, r0, a, b, sigma, jumpIntensity, jumpMean):
         super().__init__(chain)
         self.r0, self.a, self.jumpMean = float(r0), float(a), float(jumpMean)
-        self.b, self.sigma = _per_regime(b, self.n), _per_regime(sigma, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.b, self.sigma = _per_regime(b, self.n, "b"), _per_regime(sigma, self.n, "sigma")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
+        _nonnegative(self.jumpIntensity, "jumpIntensity")              # a Poisson rate; zero is the no-jump limit
+        _nonnegative(self.jumpMean, "jumpMean")                        # exponential jump sizes: a negative mean has no law
 
     def bondForcing(self, T):
         g, gfuncs, pre = _m.vasicek_jumps(self.a, self.b, self.sigma, self.jumpIntensity, self.jumpMean, T)
@@ -90,7 +114,8 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
     def __init__(self, chain, r0, theta, k, sigma):
         super().__init__(chain)
         self.r0, self.k, self.sigma = float(r0), float(k), float(sigma)
-        self.theta = _per_regime(theta, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        _nonnegative(self.r0, "r0"); _nonnegative(self.theta, "theta")  # the square-root diffusion lives on r >= 0
 
     def bondForcing(self, T):
         g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, T)
@@ -131,7 +156,7 @@ class SwitchingBlackScholesProcess(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma = _per_regime(sigma, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -158,7 +183,8 @@ class SwitchingHestonModel(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.sigma, self.rho = float(kappa), float(sigma), float(rho)
-        self.theta = _per_regime(theta, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        _correlation(self.rho); _nonnegative(self.v0, "v0"); _nonnegative(self.theta, "theta")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -173,9 +199,10 @@ class SwitchingMerton76Process(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma, jumpIntensity, logJumpMean, logJumpVol):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma = _per_regime(sigma, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        _nonnegative(self.jumpIntensity, "jumpIntensity")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -192,9 +219,11 @@ class SwitchingBatesModel(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.sigma, self.rho = float(kappa), float(sigma), float(rho)
-        self.theta = _per_regime(theta, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        _correlation(self.rho); _nonnegative(self.v0, "v0"); _nonnegative(self.theta, "theta")
+        _nonnegative(self.jumpIntensity, "jumpIntensity")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -210,7 +239,12 @@ class SwitchingVarianceGammaProcess(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma, nu, theta):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma, self.nu, self.theta = _per_regime(sigma, self.n), _per_regime(nu, self.n), _per_regime(theta, self.n)
+        self.sigma, self.nu, self.theta = _per_regime(sigma, self.n, "sigma"), _per_regime(nu, self.n, "nu"), _per_regime(theta, self.n, "theta")
+        _nonnegative(self.nu, "nu")
+        for i, (sg, nu_, th) in enumerate(zip(self.sigma, self.nu, self.theta)):
+            if not (math.isfinite(sg) and math.isfinite(th)) or 1.0 - th * nu_ - 0.5 * sg * sg * nu_ <= 0.0:
+                raise ValueError("variance gamma needs finite sigma and theta with 1 - theta nu - sigma^2 nu / 2 > 0 in every "
+                                 f"regime, or E[S] is infinite and there is no martingale correction (regime {i})")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -228,7 +262,7 @@ class SwitchingHullWhite(SwitchingModel):
     or a QuantLib YieldTermStructureHandle (times in years from its reference date)."""
     def __init__(self, chain, termStructure, a, sigma):
         super().__init__(chain)
-        self.a = float(a); self.sigma = _per_regime(sigma, self.n)
+        self.a = float(a); self.sigma = _per_regime(sigma, self.n, "sigma")
         if np.isscalar(termStructure):
             r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
         elif hasattr(termStructure, "discount"):
@@ -295,7 +329,8 @@ class SwitchingG2(SwitchingModel):
     def __init__(self, chain, termStructure, a, sigma, b, eta, rho):
         super().__init__(chain)
         self.a, self.b = float(a), float(b)
-        self.sigma, self.eta, self.rho = _per_regime(sigma, self.n), _per_regime(eta, self.n), _per_regime(rho, self.n)
+        self.sigma, self.eta, self.rho = _per_regime(sigma, self.n, "sigma"), _per_regime(eta, self.n, "eta"), _per_regime(rho, self.n, "rho")
+        _correlation(self.rho)
         if np.isscalar(termStructure):
             r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
         elif hasattr(termStructure, "discount"):
@@ -365,7 +400,8 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.theta, self.rho = float(kappa), float(theta), float(rho)
-        self.xi = _per_regime(xi, self.n)
+        self.xi = _per_regime(xi, self.n, "xi")
+        _correlation(self.rho)
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -385,8 +421,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
         Lbar = (sp.diags(self.r - self.q - 0.5 * grid.V) @ grid.d1x + 0.5 * V @ grid.d2x
                 + sp.diags(self.kappa * (self.theta - grid.V)) @ grid.d1v + xi2bar * A1 + xibar * A2 - self.r * I)
-        S = np.exp(grid.X)
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(np.exp(grid.X))
         return Lbar, [A1, A2], [xi ** 2, xi], grid, u0, (x0, self.v0)
 
 
@@ -396,7 +431,12 @@ class SwitchingIntensityBasket(SwitchingModel):
     by the same regime chain, with independent diffusions. The joint survival E exp(-int sum_k lambda^k) is the
     bond of the summed forcing with the product of the prefactors, so ZeroCouponBond(t) is the probability that no
     name has defaulted by t and CreditDefaultSwap is a first-to-default swap. The common regime is the only source
-    of dependence: defaultCorrelation(t) measures it."""
+    of dependence: defaultCorrelation(t) measures it.
+
+    A Vasicek intensity is Gaussian and so negative with positive probability. It is the Ornstein-Uhlenbeck hazard of
+    the fast-switching literature and is accurate when the volatility is small against the level; when it is not, the
+    "survival probability" can exceed one, and the engines warn (IntensityWarning). A Cox-Ingersoll-Ross intensity
+    stays nonnegative."""
     def __init__(self, models):
         chain = models[0].chain
         if any(m.chain is not chain for m in models):
@@ -418,7 +458,7 @@ class SwitchingIntensityBasket(SwitchingModel):
         from .engines import NumericalSwitchingEngine
         from .instruments import ZeroCouponBond
         def surv(model):
-            b = ZeroCouponBond(t); b.setPricingEngine(NumericalSwitchingEngine(model, regime=regime)); return b.NPV()
+            return NumericalSwitchingEngine(model, regime=regime)._survival(t)
         q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
         return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
 
@@ -451,7 +491,7 @@ class SwitchingCEVProcess(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma, beta):
         super().__init__(chain)
         self.S0, self.r, self.q, self.beta = float(S0), float(r), float(q), float(beta)
-        self.sigma = _per_regime(sigma, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
 
     def operators(self, instrument, n, width, stretch=None):
         from .firstorder import Grid1D
@@ -463,5 +503,5 @@ class SwitchingCEVProcess(SwitchingModel):
         D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
         A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
         Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(S)
         return Lbar, [A], [s2], grid, u0, self.S0

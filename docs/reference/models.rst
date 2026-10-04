@@ -90,6 +90,10 @@ Several intensities (Vasicek or CIR) driven by one chain, with independent diffu
 joint survival probability and ``CreditDefaultSwap`` a first-to-default swap; ``defaultCorrelation(t)`` measures
 the dependence the common regime creates. The frozen limit factorises into the marginal survivals.
 
+A Vasicek intensity is Gaussian, so it is negative with positive probability and the survival probability can
+exceed one when the volatility is large against the level; the engines raise an ``IntensityWarning`` when it does.
+A CIR intensity stays nonnegative.
+
 .. code-block:: python
 
     basket = rl.SwitchingIntensityBasket([rl.SwitchingVasicek(chain, 0.02, 0.5, [0.01, 0.06], 0.003),

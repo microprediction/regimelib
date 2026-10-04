@@ -4,8 +4,9 @@ Black-Scholes options (the integrated variance is known given the path). Returns
 is on the engine after calculate()."""
 import math
 import numpy as np
-from .instruments import ZeroCouponBond, VanillaOption
+from .instruments import ZeroCouponBond, VanillaOption, rejectFeatures
 from .models import SwitchingVasicek, SwitchingBlackScholesProcess
+from .chain import stateIndex
 
 
 def _N(x):
@@ -14,7 +15,10 @@ def _N(x):
 
 class MonteCarloSwitchingEngine:
     def __init__(self, model, regime=0, paths=100000, seed=0):
-        self.model, self.regime, self.paths, self.seed = model, regime, int(paths), seed
+        import numbers
+        if isinstance(paths, bool) or not isinstance(paths, numbers.Integral) or paths < 2:
+            raise ValueError(f"paths must be an integer of at least 2, so that a standard error exists; got {paths!r}")
+        self.model, self.regime, self.paths, self.seed = model, stateIndex(regime, model.n), int(paths), seed
         self.standardError = None
 
     def _paths(self, T):
@@ -45,14 +49,24 @@ class MonteCarloSwitchingEngine:
                     # int over [s0,s1] of ((1 - e^{-a (T - u)}) / a)^2 sigma_y^2 du
                     f = lambda u: (u - 2 * math.exp(-a * (T - u)) / a + math.exp(-2 * a * (T - u)) / (2 * a)) / (a * a)
                     var += m.sigma[y] ** 2 * (f(s1) - f(s0))
-                vals.append(math.exp(-mean + 0.5 * var))
+                final = states[-1] if len(states) else self.regime      # at T = 0 no dwell is recorded
+                paid = instrument.regimeAtMaturity is None or final == instrument.regimeAtMaturity
+                vals.append(math.exp(-mean + 0.5 * var) if paid else 0.0)
         elif isinstance(instrument, VanillaOption) and isinstance(m, SwitchingBlackScholesProcess):
-            K, F = instrument.strike, m.forward(T)
+            rejectFeatures(instrument, "the Monte Carlo referee", ("American exercise", "a barrier", "geometric averaging"),
+                           "SwitchingFDEngine, or NumericalSwitchingEngine for the geometric Asian option")
+            K, F, disc = instrument.strike, m.forward(T), math.exp(-m.r * T)
+            sign = 1.0 if instrument.isCall else -1.0
             for states, durs in self._paths(T):
                 v = float(np.sum(np.asarray(m.sigma)[states] ** 2 * durs))      # integrated variance given the path
                 sv = math.sqrt(v); d1 = (math.log(F / K) + 0.5 * v) / sv; d2 = d1 - sv
-                call = math.exp(-m.r * T) * (F * _N(d1) - K * _N(d2))
-                vals.append(call if instrument.isCall else call - math.exp(-m.r * T) * (F - K))
+                if instrument.payoffType == "cash":                             # pays the cash amount beyond the strike
+                    vals.append(disc * instrument.cash * _N(sign * d2))
+                elif instrument.payoffType == "asset":                          # pays the asset beyond the strike
+                    vals.append(disc * F * _N(sign * d1))
+                else:
+                    call = disc * (F * _N(d1) - K * _N(d2))
+                    vals.append(call if instrument.isCall else call - disc * (F - K))
         else:
             raise TypeError("Monte Carlo referee covers Vasicek bonds and Black-Scholes options")
         vals = np.asarray(vals)

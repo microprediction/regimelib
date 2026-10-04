@@ -6,10 +6,11 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap, rejectFeatures
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .chain import stateIndex
 from .g2options import g2_zcb_call
 from .hybrid import SwitchingEquityRates
 
@@ -17,6 +18,20 @@ from .hybrid import SwitchingEquityRates
 def _gauss(U, n):
     x, w = np.polynomial.legendre.leggauss(n)
     return (x + 1) * U / 2, w * U / 2
+
+
+def _expansionOrder(value, name, allowNone=False):
+    """An expansion order is a nonnegative integer (or None for the adaptive order)."""
+    import numbers
+    if value is None and allowNone:
+        return None
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 0:
+        raise ValueError(f"{name} must be {'None or ' if allowNone else ''}a non-negative integer, got {value!r}")
+    return int(value)
+
+
+class IntensityWarning(UserWarning):
+    """A default intensity model has produced a survival probability above one."""
 
 
 class ExpansionWarning(UserWarning):
@@ -39,7 +54,7 @@ class SwitchingEngine:
     supportsResults = True
 
     def __init__(self, model, regime=0, nodes=96):
-        self.model, self.regime, self.nodes = model, regime, nodes
+        self.model, self.regime, self.nodes = model, stateIndex(regime, model.n), nodes
         self._memo = {}                                       # (fingerprint, T, u) -> terminal data, shared across strikes
 
     def _fingerprint(self):
@@ -78,11 +93,18 @@ class SwitchingEngine:
 
     def calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
+        if isinstance(instrument, VanillaOption):                       # the transforms below are of the terminal value
+            rejectFeatures(instrument, "the characteristic-function engine", ("American exercise", "a barrier"),
+                           "SwitchingFDEngine")
+        if isinstance(instrument, Swaption) and instrument.exerciseTimes is not None and (
+                len(instrument.exerciseTimes) > 1 or abs(instrument.exerciseTimes[0] - T) > 1e-12):
+            raise TypeError("the characteristic-function engine prices European swaptions; "
+                            "use SwitchingFDEngine for Bermudan exercise")
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
             if instrument.regimeAtMaturity is not None:
-                a0 = np.zeros(m.n); a0[instrument.regimeAtMaturity] = 1.0
+                a0 = np.zeros(m.n); a0[stateIndex(instrument.regimeAtMaturity, m.n, "regimeAtMaturity")] = 1.0
             P = float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
             out = {"value": P}
             B = self._bondB(T)
@@ -171,18 +193,31 @@ class SwitchingEngine:
     def _cds(self, cds):
         """Survival Q(t) is the model's bond price; premium leg = s sum tau_i D(t_i) Q(t_i) (+ accrual to the mid-point
         on default), protection = (1 - R) sum D(t_mid) (Q(t_{i-1}) - Q(t_i))."""
-        Q = lambda t: 1.0 if t <= 0 else self.calculate(ZeroCouponBond(t))
-        D = cds.discount; prem = prot = 0.0; t0 = 0.0
+        Q = lambda t: 1.0 if t <= 0 else self._survival(t)
+        D = cds.discount; annuity = prot = 0.0; t0 = 0.0            # the annuity is the premium leg per unit spread
         for t1 in cds.times:
             tau = t1 - t0; tm = 0.5 * (t0 + t1); q0, q1 = Q(t0), Q(t1)
-            prem += cds.spread * tau * D(t1) * q1
+            annuity += tau * D(t1) * q1
             if cds.accrualOnDefault:
-                prem += cds.spread * 0.5 * tau * D(tm) * (q0 - q1)
+                annuity += 0.5 * tau * D(tm) * (q0 - q1)
             prot += (1.0 - cds.recovery) * D(tm) * (q0 - q1)
             t0 = t1
+        if annuity == 0.0:
+            raise ValueError("the premium annuity is zero, so the fair spread is undefined")
+        prem = cds.spread * annuity
         sign = 1.0 if cds.isBuyer else -1.0
         return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
-                "fairSpread": cds.spread * prot / prem}
+                "fairSpread": prot / annuity}
+
+    def _survival(self, t):
+        """The model's bond read as a survival probability. A Gaussian intensity (Vasicek) can be negative, so the
+        value can exceed one at high volatility or long horizons; that is reported, not hidden."""
+        q = self.calculate(ZeroCouponBond(t))
+        if q > 1.0 + 1e-12:
+            warnings.warn(f"the survival probability to t = {t:g} is {q:.6g}, above one: a Gaussian (Vasicek) intensity is "
+                          "negative with positive probability, and at these parameters that matters. Use a "
+                          "Cox-Ingersoll-Ross intensity or a lower volatility.", IntensityWarning, stacklevel=4)
+        return q
 
     def _hybridVanilla(self, opt):
         """Lewis's formula with the discounted characteristic function (regimelib.hybrid); the put by parity with the
@@ -335,6 +370,7 @@ class FastSwitchingEngine(SwitchingEngine):
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
     def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12):
         super().__init__(model, regime, nodes)
+        order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
 

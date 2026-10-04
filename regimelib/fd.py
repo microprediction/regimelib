@@ -9,7 +9,8 @@ import math
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import splu
-from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption
+from .instruments import VanillaOption, BarrierOption, Swaption, CouponBondOption, rejectFeatures
+from .chain import stateIndex
 
 
 class SwitchingFDEngine:
@@ -18,6 +19,10 @@ class SwitchingFDEngine:
     def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None):
         """`stretch` concentrates the nodes of a two-dimensional grid around the strike and the starting factor
         (the width of the dense region as a fraction of the interval, 0.1 to 0.3 is usual); None is uniform."""
+        import numbers
+        if isinstance(steps, bool) or not isinstance(steps, numbers.Integral) or steps < 1:
+            raise ValueError(f"steps must be a positive integer number of time steps, got {steps!r}")
+        regime, steps = stateIndex(regime, model.n), int(steps)
         self.model, self.regime, self.n, self.steps, self.width, self.stretch = model, regime, n, steps, width, stretch
 
     # -- the block operator on a given grid ---------------------------------------------------------------------
@@ -79,6 +84,8 @@ class SwitchingFDEngine:
             return out if results else out["value"]
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the switching finite-difference engine prices vanilla, American, barrier and Bermudan instruments")
+        rejectFeatures(instrument, "the switching finite-difference engine", ("geometric averaging",),
+                       "NumericalSwitchingEngine or FastSwitchingEngine")
         if isinstance(instrument, BarrierOption):
             out = self._barrier(instrument)
         else:
