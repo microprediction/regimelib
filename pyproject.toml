@@ -24,6 +24,7 @@ Source = "https://github.com/microprediction/regimelib"
 Issues = "https://github.com/microprediction/regimelib/issues"
 [project.optional-dependencies]
 test = ["pytest", "QuantLib"]
+docs = ["sphinx", "sphinx-rtd-theme"]
 [build-system]
 requires = ["setuptools>=61"]
 build-backend = "setuptools.build_meta"

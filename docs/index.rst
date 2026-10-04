@@ -25,17 +25,33 @@ referee.
     bond.setPricingEngine(rl.FastSwitchingEngine(model, order=4, regime=0))
     print(bond.NPV(), bond.delta(), bond.gamma())
 
-.. toctree::
-   :maxdepth: 1
-   :caption: Getting started
+Models
+------
 
-   getting_started
+Each model has one page with its mathematics and the Python that evaluates it: the dynamics, the reduction to a
+linear system, the closed form for a two-regime chain, and that closed form computed next to the library's price.
+
+- **Short rates and credit:** :doc:`models/vasicek`, :doc:`models/cir`, :doc:`models/hull_white`, :doc:`models/g2`,
+  :doc:`models/intensity_basket`
+- **Equity diffusions:** :doc:`models/black_scholes`, :doc:`models/heston`, :doc:`models/cev`,
+  :doc:`models/heston_vol_of_vol`
+- **Jump models:** :doc:`models/vasicek_jumps`, :doc:`models/merton`, :doc:`models/bates`,
+  :doc:`models/variance_gamma`
+- **Hybrid:** :doc:`models/equity_rates`
+
+The common formula, the helpers and the index table are on :doc:`models/index`.
 
 .. toctree::
    :maxdepth: 2
    :caption: Models: mathematics and Python
 
    models/index
+
+.. toctree::
+   :maxdepth: 1
+   :caption: Getting started
+
+   getting_started
 
 .. toctree::
    :maxdepth: 2
