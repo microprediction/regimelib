@@ -15,6 +15,30 @@ def _years(t, dayCounter=None):
     return float(t)
 
 
+def _choice(value, allowed, name):
+    """One of a fixed set of labels. Anything else is refused: defaulting to one side would build the opposite
+    contract from a misspelling."""
+    label = str(value).lower()
+    if label not in allowed:
+        raise ValueError(f"{name} must be one of {', '.join(sorted(allowed))}; got {value!r}")
+    return label
+
+
+def _schedule(times, name, after=None, minimum=1):
+    """Payment or fixing times as given: finite, strictly increasing, and later than `after` when one is set. An
+    unordered schedule is refused, not sorted, since sorting would hide the caller's mistake."""
+    times = [float(t) for t in times]
+    if len(times) < minimum:
+        raise ValueError(f"{name} needs at least {minimum} time{'s' if minimum > 1 else ''}")
+    if not all(math.isfinite(t) for t in times):
+        raise ValueError(f"{name} must be finite")
+    if any(t1 <= t0 for t0, t1 in zip(times[:-1], times[1:])):
+        raise ValueError(f"{name} must be strictly increasing; got {times}")
+    if after is not None and times[0] <= after:
+        raise ValueError(f"the first of {name} must be later than {after}; got {times[0]}")
+    return times
+
+
 class Instrument:
     """QuantLib's mold: setPricingEngine, then NPV() and the greeks the engine provides (delta(), gamma(), theta(),
     vega(), rho()); a greek the engine does not compute raises, as QuantLib's "not provided" does."""
@@ -70,6 +94,12 @@ class ZeroCouponBond(Instrument):
     def __init__(self, maturity, dayCounter=None, regimeAtMaturity=None):
         super().__init__()
         self.maturity = _years(maturity, dayCounter)
+        if not math.isfinite(self.maturity) or self.maturity < 0:
+            raise ValueError(f"maturity must be finite and nonnegative, got {self.maturity}")
+        if regimeAtMaturity is not None:
+            import numbers
+            if isinstance(regimeAtMaturity, bool) or not isinstance(regimeAtMaturity, numbers.Integral) or regimeAtMaturity < 0:
+                raise ValueError(f"regimeAtMaturity must be a nonnegative integer regime index, got {regimeAtMaturity!r}")
         self.regimeAtMaturity = regimeAtMaturity
 
 
@@ -95,10 +125,10 @@ class VanillaOption(Instrument):
         elif payoff[0] in ("cash", "asset"):
             self.payoffType = payoff[0]; kind, self.strike = payoff[1], float(payoff[2])
             self.cash = float(payoff[3]) if payoff[0] == "cash" else None
-            self.isCall = str(kind).lower() == "call"
+            self.isCall = _choice(kind, ("call", "put"), "the option type") == "call"
         else:
             kind, self.strike = payoff
-            self.isCall = str(kind).lower() == "call"
+            self.isCall = _choice(kind, ("call", "put"), "the option type") == "call"
         if maturity is None:
             raise ValueError("give the maturity in years or as a QuantLib Date")
         self.maturity = _years(maturity, dayCounter)
@@ -144,7 +174,9 @@ class CouponBond(Instrument):
     def __init__(self, cashflows=None, faceAmount=None, couponRate=None, times=None, dayCounter=None):
         super().__init__()
         if cashflows is None:
-            ts = [_years(t, dayCounter) for t in times]
+            ts = _schedule([_years(t, dayCounter) for t in times], "the coupon times", after=0.0)
+            if not (math.isfinite(float(faceAmount)) and math.isfinite(float(couponRate))):
+                raise ValueError("faceAmount and couponRate must be finite")
             cashflows = [(t, faceAmount * couponRate * (t - (ts[i - 1] if i else 0.0))) for i, t in enumerate(ts)]
             cashflows[-1] = (ts[-1], cashflows[-1][1] + faceAmount)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
@@ -156,7 +188,7 @@ class ZeroCouponBondOption(Instrument):
     (QuantLib: Vasicek.discountBondOption(type, strike, maturity, bondMaturity))."""
     def __init__(self, kind, strike, maturity, bondMaturity):
         super().__init__()
-        self.isCall = str(kind).lower() == "call"
+        self.isCall = _choice(kind, ("call", "put"), "kind") == "call"
         self.strike, self.maturity, self.bondMaturity = float(strike), _years(maturity), _years(bondMaturity)
         if self.bondMaturity <= self.maturity:
             raise ValueError("the bond must mature after the option")
@@ -166,7 +198,7 @@ class CouponBondOption(Instrument):
     """European call or put expiring at `maturity` on a bond with fixed cash flows [(time, amount)] after expiry."""
     def __init__(self, kind, strike, maturity, cashflows, dayCounter=None):
         super().__init__()
-        self.isCall = str(kind).lower() == "call"; self.strike = float(strike)
+        self.isCall = _choice(kind, ("call", "put"), "kind") == "call"; self.strike = float(strike)
         self.maturity = _years(maturity, dayCounter)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
         if min(t for t, _ in self.cashflows) <= self.maturity:
@@ -181,12 +213,22 @@ class Swaption(Instrument):
     priced by SwitchingFDEngine (QuantLib: TreeSwaptionEngine)."""
     def __init__(self, kind, maturity, fixedTimes, fixedRate, notional=1.0, dayCounter=None, exerciseTimes=None):
         super().__init__()
-        self.isPayer = str(kind).lower() == "payer"
+        self.isPayer = _choice(kind, ("payer", "receiver"), "kind") == "payer"
         if hasattr(maturity, "dates"):                       # a QuantLib BermudanExercise
             exerciseTimes = [_years(d, dayCounter) for d in maturity.dates()]; maturity = exerciseTimes[0]
-        self.exerciseTimes = None if exerciseTimes is None else sorted(_years(t, dayCounter) for t in exerciseTimes)
-        self.maturity = _years(maturity, dayCounter); ts = [_years(t, dayCounter) for t in fixedTimes]
+        self.maturity = _years(maturity, dayCounter)
         self.fixedRate, self.notional = float(fixedRate), float(notional)
+        if not all(math.isfinite(v) for v in (self.maturity, self.fixedRate, self.notional)):
+            raise ValueError("maturity, fixedRate and notional must be finite")
+        ts = _schedule([_years(t, dayCounter) for t in fixedTimes], "fixedTimes", after=self.maturity)
+        if exerciseTimes is None:
+            self.exerciseTimes = None
+        else:                                                # the first exercise is the expiry the first accrual starts from
+            self.exerciseTimes = _schedule([_years(t, dayCounter) for t in exerciseTimes], "exerciseTimes")
+            if abs(self.exerciseTimes[0] - self.maturity) > 1e-9:
+                raise ValueError(f"the first exercise time must be the maturity {self.maturity}; got {self.exerciseTimes[0]}")
+            if self.exerciseTimes[-1] >= ts[-1]:
+                raise ValueError("every exercise time must be earlier than the last fixed payment")
         cfs = [(t, notional * fixedRate * (t - (ts[i - 1] if i else self.maturity))) for i, t in enumerate(ts)]
         cfs[-1] = (ts[-1], cfs[-1][1] + notional)
         self.cashflows = cfs
@@ -198,8 +240,9 @@ class CapFloor(Instrument):
     floorlets are the calls (QuantLib: CapFloor with AnalyticCapFloorEngine)."""
     def __init__(self, kind, times, strike, notional=1.0, dayCounter=None):
         super().__init__()
-        self.isCap = str(kind).lower() == "cap"
-        self.times = [_years(t, dayCounter) for t in times]; self.strike, self.notional = float(strike), float(notional)
+        self.isCap = _choice(kind, ("cap", "floor"), "kind") == "cap"
+        self.times = _schedule([_years(t, dayCounter) for t in times], "the cap or floor times", minimum=2)
+        self.strike, self.notional = float(strike), float(notional)
         self.maturity = self.times[-1]
 
 
@@ -210,9 +253,11 @@ class CreditDefaultSwap(Instrument):
     valued at the mid-point of each accrual period, as QuantLib's MidPointCdsEngine, with `accrualOnDefault`."""
     def __init__(self, side, spread, times, recovery, discount=0.0, accrualOnDefault=True, dayCounter=None):
         super().__init__()
-        self.isBuyer = str(side).lower() == "buyer"
+        self.isBuyer = _choice(side, ("buyer", "seller"), "side") == "buyer"
         self.spread, self.recovery = float(spread), float(recovery)
-        self.times = [_years(t, dayCounter) for t in times]
+        if not math.isfinite(self.recovery) or not 0.0 <= self.recovery <= 1.0:
+            raise ValueError(f"recovery must be finite and lie in [0, 1], got {self.recovery}")
+        self.times = _schedule([_years(t, dayCounter) for t in times], "the premium times", after=0.0)
         self.discount = discount if callable(discount) else (lambda t, r=float(discount): math.exp(-r * t))
         self.accrualOnDefault = accrualOnDefault
         self.maturity = self.times[-1]
