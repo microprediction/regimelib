@@ -1,4 +1,5 @@
 """A finite Markov chain of regimes, given by its generator."""
+import math
 import numpy as np
 
 
@@ -44,7 +45,8 @@ class RegimeChain:
 
     def meanHoldingTime(self):
         """The expansion scale of the engine: n / -trace Q."""
-        return self.numberOfRegimes() / -np.trace(self.generator)
+        rate = -float(np.trace(self.generator))
+        return math.inf if rate == 0.0 else self.numberOfRegimes() / rate      # a chain that never switches
 
     @staticmethod
     def twoState(rate12, rate21):

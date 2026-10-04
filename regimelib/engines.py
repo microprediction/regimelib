@@ -106,6 +106,9 @@ class SwitchingEngine:
                 len(instrument.exerciseTimes) > 1 or abs(instrument.exerciseTimes[0] - T) > 1e-12):
             raise TypeError("the characteristic-function engine prices European swaptions; "
                             "use SwitchingFDEngine for Bermudan exercise")
+        exact = self._exactAtTheEnds(instrument)                        # zero maturity, nonpositive strike
+        if exact is not None:
+            return exact if results else exact["value"]
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
@@ -139,13 +142,80 @@ class SwitchingEngine:
         elif isinstance(instrument, CapFloor):
             v = 0.0
             for T0, T1 in zip(instrument.times[:-1], instrument.times[1:]):
-                tau = T1 - T0; kb = 1.0 / (1.0 + tau * instrument.strike)
-                o = ZeroCouponBondOption("put" if instrument.isCap else "call", kb, T0, T1)
-                v += instrument.notional * (1.0 + tau * instrument.strike) * self._bondOption(o)
+                tau = T1 - T0; A = 1.0 + tau * instrument.strike
+                if A > 0:                                                # caplet = A puts on the bond struck at 1 / A
+                    o = ZeroCouponBondOption("put" if instrument.isCap else "call", 1.0 / A, T0, T1)
+                    v += instrument.notional * A * self.calculate(o)
+                elif instrument.isCap:                                   # 1 - A P(T0, T1) > 0 always: no optionality
+                    v += instrument.notional * (self.calculate(ZeroCouponBond(T0)) - A * self.calculate(ZeroCouponBond(T1)))
             out = {"value": v}
         else:
             raise TypeError("unsupported instrument")
         return out if results else out["value"]
+
+    def _exactAtTheEnds(self, instrument):
+        """Values that need no transform: at zero maturity a claim is worth its payoff, and a strike at or below
+        zero removes the optionality of a claim on a positive price. Returning them here keeps the logarithms and
+        variances of the inversion formulas away from the ends of their domain."""
+        m, T = self.model, instrument.maturity
+        if not math.isfinite(T) or T < 0:
+            raise ValueError(f"the maturity must be finite and nonnegative, got {T}")
+        bond = lambda t: 1.0 if t == 0 else self.calculate(ZeroCouponBond(t))
+        if isinstance(instrument, ZeroCouponBond):
+            if T > 0:
+                return None
+            j = instrument.regimeAtMaturity                              # no time has passed: the regime is the starting one
+            paid = j is None or stateIndex(j, m.n, "regimeAtMaturity") == self.regime
+            return {"value": 1.0 if paid else 0.0, "delta": 0.0, "gamma": 0.0}
+        if isinstance(instrument, ZeroCouponBondOption):
+            K, S = instrument.strike, instrument.bondMaturity
+            if T == 0:
+                return {"value": max(bond(S) - K, 0.0) if instrument.isCall else max(K - bond(S), 0.0)}
+            if K <= 0:
+                return {"value": bond(S) - K * bond(T) if instrument.isCall else 0.0}
+            return None
+        if isinstance(instrument, (CouponBondOption, Swaption)):
+            isCall, K = ((instrument.isCall, instrument.strike) if isinstance(instrument, CouponBondOption)
+                         else (not instrument.isPayer, instrument.notional))
+            if T == 0 or (K <= 0 and all(c >= 0 for _, c in instrument.cashflows)):
+                value = sum(c * bond(S) for S, c in instrument.cashflows) - K * bond(T)
+                if T == 0:
+                    return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+                return {"value": value if isCall else 0.0}
+            return None
+        if not isinstance(instrument, VanillaOption):
+            return None
+        K, S0, call = instrument.strike, m.S0, instrument.isCall
+        if isinstance(instrument, ContinuousGeometricAsianOption):
+            if T == 0:                                                   # the average of a single point
+                return {"value": float(instrument.payoffOnGrid([S0])[0])}
+            return None                                                  # a nonpositive strike is handled with the forward of the average
+        if T == 0:
+            value = float(instrument.payoffOnGrid([S0])[0])
+            if instrument.payoffType != "vanilla":
+                return {"value": value}
+            side = 1.0 if call else -1.0                                 # delta is one-sided; at the strike it is the midpoint
+            inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
+            theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else 0.0) * K)
+            return {"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}
+        if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
+            if isinstance(m, SwitchingEquityRates):
+                return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T) if call else 0.0}
+            dq, dr = math.exp(-m.q * T), math.exp(-m.r * T)
+            if instrument.payoffType == "cash":
+                return {"value": dr * instrument.cash if call else 0.0}
+            if instrument.payoffType == "asset":
+                return {"value": S0 * dq if call else 0.0}
+            if not call:
+                return {"value": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "rho": 0.0}
+            return {"value": S0 * dq - K * dr, "delta": dq, "gamma": 0.0, "theta": m.q * S0 * dq - m.r * K * dr,
+                    "rho": T * K * dr}
+        return None
+
+    def _hybridBond(self, T):
+        """E exp(-int_0^T r) from the starting regime, under the equity-with-rates model."""
+        g, gfuncs, factor = self.model.discountedForcing(0.0, T)
+        return float(np.real(factor * self._aVector(g, gfuncs, T)[0][self.regime]))
 
     def _bondB(self, T):
         m = self.model
@@ -254,7 +324,10 @@ class SwitchingEngine:
         def phiY(z):
             g, gfuncs = m.averageForcing(z, T)
             return self._aVector(g, gfuncs, T)[0][self.regime]
-        FG = m.S0 * phiY(-1j).real; k = math.log(FG / K); lf = math.log(FG / m.S0)
+        FG = m.S0 * phiY(-1j).real
+        if K <= 0:                                                       # the average is positive: a forward, or nothing
+            return {"value": math.exp(-m.r * T) * (FG - K) if opt.isCall else 0.0}
+        k = math.log(FG / K); lf = math.log(FG / m.S0)
         U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
         I0 = 0.0
         for u, w in zip(us, ws):
@@ -387,6 +460,9 @@ class FastSwitchingEngine(SwitchingEngine):
         the one before): there the reduced system is solved numerically instead and `numericalNodes` counts them."""
         N = self._order()
         Q = self.model.chain.generator
+        if self.model.n == 1:                                            # nothing to expand in: a = a0 exp(int g)
+            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+            return avec, Q @ avec + np.array([gi.value(T) for gi in g], complex) * avec
         fs = FastSwitch(Q, g, order=N, a0=a0)
         base = np.asarray(fs.a(T, 0), complex)
         with np.errstate(all="ignore"):
@@ -419,6 +495,8 @@ class FastSwitchingEngine(SwitchingEngine):
         return self._aVector(g, gfuncs, T, a0)[0][self.regime]
 
     def _order(self):
+        if self.model.n == 1:
+            return None                                                  # the inverters solve numerically: there is no series
         return self.order if self.order is not None else self.maxOrder
 
     @byBelief(worst=("orderUsed", "lastIncrement"))
