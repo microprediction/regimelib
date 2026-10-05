@@ -1,0 +1,9 @@
+/* The theme keeps table cells on one line and caps the page at 800px, so a wide table runs off the right edge.
+   Let cells wrap, give the page more room, and keep a scroll bar for the rare table that is still too wide. */
+.wy-nav-content { max-width: 1100px; }
+.wy-table-responsive table td, .wy-table-responsive table th { white-space: normal; }
+.wy-table-responsive { overflow-x: auto; }
+.rst-content table.docutils td, .rst-content table.docutils th { vertical-align: top; }
+.rst-content table.docutils code.literal { white-space: nowrap; }
+/* displayed formulas scroll rather than spill */
+.rst-content div.math, .rst-content .math.notranslate { overflow-x: auto; overflow-y: hidden; }

@@ -24,7 +24,11 @@ class MonteCarloSwitchingEngine:
 
     def _paths(self, T):
         """Yield (states, durations) for each sampled regime path on [0, T]."""
-        rng = np.random.default_rng(self.seed); Q = self.model.chain.generator; n = Q.shape[0]
+        # under a belief each starting regime gets its own stream, so that the conditional estimates are independent
+        # and their standard errors combine as a root sum of squares
+        stream = getattr(self, "_beliefRegime", None)
+        seed = self.seed if stream is None or self.seed is None else [int(self.seed), int(stream)]
+        rng = np.random.default_rng(seed); Q = self.model.chain.generator; n = Q.shape[0]
         for _ in range(self.paths):
             t, y, states, durs = 0.0, self.regime, [], []
             while t < T:
@@ -63,6 +67,11 @@ class MonteCarloSwitchingEngine:
             rejectFeatures(instrument, "the Monte Carlo referee", ("American exercise", "a barrier", "geometric averaging"),
                            "SwitchingFDEngine, or NumericalSwitchingEngine for the geometric Asian option")
             K, F, disc = instrument.strike, m.forward(T), math.exp(-m.r * T)
+            if K <= 0:                                                          # S_T > 0 >= K on every path: no sampling
+                self.standardError = 0.0
+                if not instrument.isCall:
+                    return 0.0
+                return {"cash": disc * (instrument.cash or 0.0), "asset": disc * F}.get(instrument.payoffType, disc * (F - K))
             sign = 1.0 if instrument.isCall else -1.0
             for states, durs in self._paths(T):
                 v = float(np.sum(np.asarray(m.sigma)[states] ** 2 * durs))      # integrated variance given the path
