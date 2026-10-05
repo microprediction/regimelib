@@ -51,8 +51,13 @@ class SwitchingFDEngine:
         half = full_l = splu((I - 0.5 * dt * Big).tocsc())               # the implicit half step and Crank-Nicolson share it
         full_r = I + 0.5 * dt * Big
         for k in range(self.steps):
-            if k < 2:                                                    # two implicit Euler half steps
-                u = half.solve(u); u = half.solve(u)
+            if k < 2:                                                    # two implicit Euler half steps, each projected
+                u = half.solve(u)
+                if project is not None:
+                    u = np.maximum(u, project)
+                if fixed is not None:
+                    u[idx] = val
+                u = half.solve(u)
             else:
                 u = full_l.solve(full_r @ u)
             if project is not None:
@@ -108,6 +113,9 @@ class SwitchingFDEngine:
         from .instruments import ZeroCouponBond
         m = self.model
         start = self.regime if self.belief is None else list(self.belief)
+        if rate and _noDiffusion(m) == "switching level":
+            from .engines import _atoms
+            raise _atoms("an option on a bond or a swap")
         if _noDiffusion(m) == "deterministic":
             if rate:
                 reduced = NumericalSwitchingEngine(m, regime=start, information="observed")

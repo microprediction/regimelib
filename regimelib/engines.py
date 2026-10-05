@@ -39,8 +39,10 @@ def _noDiffusion(m):
             return None                                                  # stochastic variance
         if not (zero("sigma") and zero("eta") and zero("jumpIntensity")):
             return None
-        if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1:
+        if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1 and p.a != 0.0:
             answer = "switching level"
+        if hasattr(p, "k") and hasattr(p, "theta") and not hasattr(p, "S0") and len(set(p.theta)) > 1 and p.k != 0.0:
+            answer = "switching level"                                   # CIR: the level still moves the rate"
     return answer
 
 
@@ -128,17 +130,34 @@ class SwitchingEngine:
 
     def _terminal(self, T, u, stoch):
         """Memoised a(T), its derivative, the prefactor and (for stochastic volatility) the Riccati D, D' at z = u - i/2."""
-        key = (self._fingerprint(), T, u)
+        key = (self._fingerprint(), T, u) + self._cacheKey()
         hit = self._memo.get(key)
         if hit is None:
             m = self.model; z = u - 0.5j
             g, gfuncs, pre = m.returnForcing(z, T)
+            before = self._diagnosticsNow()
             avec, dvec = self._aVector(g, gfuncs, T)
-            hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None)
+            hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None, self._diagnosticsSince(before))
             if len(self._memo) > 20000:
                 self._memo.clear()
             self._memo[key] = hit
-        return hit
+        else:
+            self._diagnosticsReplay(hit[4])                              # a reused node still counts in this calculation
+        return hit[:4]
+
+    # what a cached terminal vector depends on beyond the model, the maturity and the frequency; and the diagnostics
+    # its computation contributed, so that a calculation served from the cache reports the same as a fresh one
+    def _cacheKey(self):
+        return ()
+
+    def _diagnosticsNow(self):
+        return None
+
+    def _diagnosticsSince(self, before):
+        return None
+
+    def _diagnosticsReplay(self, contribution):
+        pass
 
     # a(T) for the reduced system; subclasses choose the method
     def _a(self, g, gfuncs, T, a0=None):
@@ -483,7 +502,7 @@ class SwitchingEngine:
         """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates) and its T-derivative
         from the Riccati equation D' = xi^2 D^2 / 2 + (rho xi i u - kappa) D - (u^2 + i u) / 2."""
         if m.sigma == 0.0:                                               # the variance is deterministic: D' = -kappa D - (u^2 + iu)/2
-            D = -0.5 * (u * u + 1j * u) * (1 - cmath.exp(-m.kappa * T)) / m.kappa
+            D = -0.5 * (u * u + 1j * u) * stable_B(m.kappa, T)
             return D, -m.kappa * D - 0.5 * (u * u + 1j * u)
         d = cmath.sqrt((m.rho * m.sigma * 1j * u - m.kappa) ** 2 + m.sigma ** 2 * (1j * u + u * u))
         gm = (m.kappa - m.rho * m.sigma * 1j * u - d) / (m.kappa - m.rho * m.sigma * 1j * u + d)
@@ -572,6 +591,31 @@ class FastSwitchingEngine(SwitchingEngine):
         if self.model.n == 1:
             return None                                                  # the inverters solve numerically: there is no series
         return self.order if self.order is not None else self.maxOrder
+
+    def _cacheKey(self):
+        # the fallback to a numerical solve at a node is decided from the starting regime's component, and the vector
+        # depends on the order: both are part of what was computed
+        return (self.regime, self._order())
+
+    def _diagnosticsNow(self):
+        d = getattr(self, "_diag", None)
+        return None if d is None else dict(d)
+
+    def _diagnosticsSince(self, before):
+        if before is None:
+            return None
+        d = self._diag
+        return dict(lastTerm=d["lastTerm"] if d["lastTerm"] > before["lastTerm"] else 0.0,
+                    numericalNodes=d["numericalNodes"] - before["numericalNodes"],
+                    numericalWeight=d["numericalWeight"] if d["numericalWeight"] > before["numericalWeight"] else 0.0)
+
+    def _diagnosticsReplay(self, contribution):
+        d = getattr(self, "_diag", None)
+        if d is None or contribution is None:
+            return
+        d["lastTerm"] = max(d["lastTerm"], contribution["lastTerm"])
+        d["numericalNodes"] += contribution["numericalNodes"]
+        d["numericalWeight"] = max(d["numericalWeight"], contribution["numericalWeight"])
 
     @byBelief(worst=("orderUsed", "lastIncrement"))
     def calculate(self, instrument, results=False):

@@ -4,7 +4,7 @@ import math
 import cmath
 import numpy as np
 from .fastswitch import FastSwitch, numerical_a_callable
-from .models import bs_switching, vasicek_terminal, stable_B, ou_variance
+from .models import bs_switching, vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
 
 
 def _nodes(U, n):
@@ -93,6 +93,7 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     pi = np.real(vl[:, np.argmin(abs(wv))])
     pi = pi / pi.sum()
     var = float(pi @ np.asarray(sigmas) ** 2) * ou_variance(kappa, T)
+    refuse_hidden_variance(var, sigmas, "an option on a bond")
     if U is None:
         U = 8 / math.sqrt(var)
     b = stable_B(kappa, S - T)

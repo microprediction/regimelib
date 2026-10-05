@@ -8,7 +8,7 @@ import cmath
 import numpy as np
 from scipy.optimize import brentq
 from ._engine.options import _kronrod_nodes, _terminal_vectors
-from ._engine.models import vasicek_terminal, stable_B, ou_variance
+from ._engine.models import vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
 
 
@@ -18,6 +18,7 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
     Q = np.asarray(Q, float); m = len(thetas)
     wv, vl = np.linalg.eig(Q.T); pi = np.real(vl[:, np.argmin(abs(wv))]); pi = pi / pi.sum()
     var = float(pi @ np.asarray(sigmas) ** 2) * ou_variance(kappa, T)
+    refuse_hidden_variance(var, sigmas, "an option on a bond")
     if U is None:
         U = 8 / math.sqrt(var)
     ET = math.exp(-kappa * T); mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)

@@ -38,10 +38,33 @@ def _correlation(values, name="rho"):
     _check(values, name, lambda v: abs(v) <= 1.0, "finite and between -1 and 1")
 
 
+_SCALES = ("sigma", "eta", "xi", "logJumpVol")              # diffusion and jump-size scales: a sign has no meaning
+_SPEEDS = ("a", "k", "kappa")                                # reversion speeds: a negative one is an explosive model
+
+
+def _checkDomains(model):
+    """Shared by every model, after its constructor has run: volatilities and reversion speeds are finite and
+    nonnegative. A negative volatility describes the same law as its absolute value while breaking code that compares
+    volatilities, and a negative reversion speed is not the model these classes document."""
+    for name in _SCALES + _SPEEDS + (("b",) if type(model).__name__ == "SwitchingG2" else ()):
+        if hasattr(model, name) and getattr(model, name) is not None:
+            _nonnegative(getattr(model, name), name)
+
+
 class SwitchingModel:
     def __init__(self, chain):
         self.chain = chain
         self.n = chain.numberOfRegimes()
+
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        init = cls.__dict__.get("__init__")
+        if init is not None:
+            def checked(self, *args, __init=init, **kw):
+                __init(self, *args, **kw)
+                _checkDomains(self)
+            checked.__doc__, checked.__name__ = init.__doc__, "__init__"
+            cls.__init__ = checked
 
 
 # ---------------------------------------------------------------- short-rate models: zero-coupon bonds

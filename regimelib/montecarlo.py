@@ -7,6 +7,20 @@ import numpy as np
 from .instruments import ZeroCouponBond, VanillaOption, rejectFeatures
 from .models import SwitchingVasicek, SwitchingBlackScholesProcess
 from .information import startingBelief, byBelief
+from ._engine.models import stable_B, SMALL_SPEED
+
+
+def _segment(a, lo, hi):
+    """(int_lo^hi B(t) dt, int_lo^hi B(t)^2 dt) for the loading B(t) = (1 - e^{-a t}) / a: closed forms away from
+    a = 0, Gauss-Legendre near it, where the closed forms cancel."""
+    if a * hi >= SMALL_SPEED:
+        I1 = lambda t: (t + math.expm1(-a * t) / a) / a
+        I2 = lambda t: (t + 2.0 * math.expm1(-a * t) / a - math.expm1(-2.0 * a * t) / (2.0 * a)) / a ** 2
+        return I1(hi) - I1(lo), I2(hi) - I2(lo)
+    x, w = np.polynomial.legendre.leggauss(8)
+    ts = lo + (x + 1) * (hi - lo) / 2
+    b = np.array([stable_B(a, t) for t in ts])
+    return float(w @ b) * (hi - lo) / 2, float(w @ (b * b)) * (hi - lo) / 2
 
 
 def _N(x):
@@ -48,18 +62,13 @@ class MonteCarloSwitchingEngine:
             for states, durs in self._paths(T):
                 # r follows dr = a (b_y - r) dt + sigma_y dW; int_0^T r ds is Gaussian given the path
                 ends = np.cumsum(durs); starts = ends - durs
-                if a == 0.0:                                                    # no reversion: r = r0 + int sigma dW
-                    var = sum(m.sigma[y] ** 2 * ((T - s0) ** 3 - (T - s1) ** 3) / 3 for y, s0, s1 in zip(states, starts, ends))
-                    final = states[-1] if len(states) else self.regime
-                    paid = instrument.regimeAtMaturity is None or final == instrument.regimeAtMaturity
-                    vals.append(math.exp(-m.r0 * T + 0.5 * var) if paid else 0.0); continue
-                mean = m.r0 * (1 - math.exp(-a * T)) / a; var = 0.0
+                # int_0^T r = r0 B(T) + sum over dwells of [a b_y int B(T - u) du] + noise of variance
+                # sigma_y^2 int B(T - u)^2 du, with B the loading, evaluated stably for any a >= 0
+                mean = m.r0 * stable_B(a, T); var = 0.0
                 for y, s0, s1 in zip(states, starts, ends):
-                    # contribution of the drift toward b_y over [s0, s1] to int_0^T r, and of the noise there
-                    mean += m.b[y] * ((s1 - s0) - (math.exp(-a * (T - s1)) - math.exp(-a * (T - s0))) / a)
-                    # int over [s0,s1] of ((1 - e^{-a (T - u)}) / a)^2 sigma_y^2 du
-                    f = lambda u: (u - 2 * math.exp(-a * (T - u)) / a + math.exp(-2 * a * (T - u)) / (2 * a)) / (a * a)
-                    var += m.sigma[y] ** 2 * (f(s1) - f(s0))
+                    i1, i2 = _segment(a, T - s1, T - s0)
+                    mean += a * m.b[y] * i1
+                    var += m.sigma[y] ** 2 * i2
                 final = states[-1] if len(states) else self.regime      # at T = 0 no dwell is recorded
                 paid = instrument.regimeAtMaturity is None or final == instrument.regimeAtMaturity
                 vals.append(math.exp(-mean + 0.5 * var) if paid else 0.0)

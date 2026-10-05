@@ -9,7 +9,7 @@ import cmath
 import numpy as np
 from ._engine.options import _kronrod_nodes
 from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable
-from ._engine.models import loadings, stable_B, ou_variance
+from ._engine.models import loadings, stable_B, ou_variance, refuse_hidden_variance
 
 
 def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T=None):
@@ -65,6 +65,12 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     A = np.asarray(a_vec(tau, 0.0, np.ones(m))).real                    # bond factors at expiry per regime
     if var < -1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy):
         raise ValueError("the factor covariance is not positive semidefinite")
+    # the shortcut below needs the variance to vanish in every regime, not only on stationary average
+    perRegime = (Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
+                 + 2 * Ba * Bb * rho * sig * eta * ou_variance((a + b) / 2, T))
+    scale = Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
+    if not np.all(perRegime <= 1e-12 * np.maximum(scale, 1e-300)):
+        refuse_hidden_variance(var if var > 1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy) else 0.0, [1.0], "a G2 bond option")
     if var <= 1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy) or var == 0.0:
         # B_a x_T + B_b y_T has no variance (no volatility, or exact cancellation): the bond at expiry is A_j in regime j
         return float(sum(max(A[j] - K, 0.0) * np.asarray(a_vec(T, 0.0, np.eye(m)[j]))[start].real for j in range(m)))
