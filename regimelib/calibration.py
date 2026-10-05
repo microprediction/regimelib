@@ -49,6 +49,33 @@ class VolatilityHelper:
         return self.impliedVolatility() - self.volatility
 
 
+# The domain of a parameter by its attribute name. A name that is not listed is unbounded: rates, dividend yields, mean
+# levels of Gaussian rates and log jump means are any real number, and a wrong guess here would silently constrain a fit.
+_NONNEGATIVE = ("sigma", "eta", "xi", "v0", "jumpIntensity", "logJumpVol", "jumpMean")
+_POSITIVE = ("kappa", "a", "k", "nu", "S0")                      # reversion speeds, the gamma variance rate, the spot
+_TINY = 1e-8
+
+
+def defaultBounds(model, name):
+    """(lower, upper) for one calibrated parameter of `model`. Two names mean different things in different models:
+    `theta` is a variance or square-root level (nonnegative) except in variance gamma, where it is a signed drift,
+    and `b` is a signed mean level except in G2++, where it is a reversion speed."""
+    kind = type(model).__name__
+    if name == "chain":
+        return 0.0, np.inf                                   # switching rates; zero closes a transition
+    if name == "rho":
+        return -1.0, 1.0
+    if name == "theta":
+        return (-np.inf, np.inf) if "VarianceGamma" in kind else (0.0, np.inf)
+    if name == "b":
+        return (_TINY, np.inf) if kind == "SwitchingG2" else (-np.inf, np.inf)
+    if name in _NONNEGATIVE:
+        return 0.0, np.inf
+    if name in _POSITIVE:
+        return _TINY, np.inf
+    return -np.inf, np.inf
+
+
 def _get(model, name):
     if name == "chain":
         Q = model.chain.generator; n = Q.shape[0]
@@ -86,9 +113,18 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
     if repeated:
         raise ValueError(f"each parameter may be named once; repeated: {', '.join(repeated)}")
     x0 = np.concatenate([_get(model, p) for p in parameters]); sizes = [len(_get(model, p)) for p in parameters]
-    lo = np.full(len(x0), 1e-8); hi = np.full(len(x0), np.inf)
     if bounds is not None:
-        lo, hi = np.asarray(bounds[0], float), np.asarray(bounds[1], float)
+        lo, hi = (np.broadcast_to(np.asarray(b, float), x0.shape).copy() for b in bounds)
+    else:                                                   # each parameter's own domain, not one bound for all
+        domains = [defaultBounds(model, p) for p in parameters]
+        lo = np.concatenate([np.full(s, d[0]) for s, d in zip(sizes, domains)])
+        hi = np.concatenate([np.full(s, d[1]) for s, d in zip(sizes, domains)])
+    k = 0
+    for p, s in zip(parameters, sizes):
+        outside = [float(v) for v, l, h in zip(x0[k:k + s], lo[k:k + s], hi[k:k + s]) if not l <= v <= h]
+        if outside:
+            raise ValueError(f"the starting value of {p} is outside its bounds [{lo[k]}, {hi[k]}]: {outside}")
+        k += s
 
     def apply(x):
         k = 0

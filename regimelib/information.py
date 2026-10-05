@@ -84,11 +84,11 @@ def byBelief(mean=(), worst=(), rss=()):
             try:
                 for i, w in enumerate(belief):
                     if w > 0.0:
-                        self.regime = i
+                        self.regime = self._beliefRegime = i
                         parts.append((w, calculate(self, instrument, *args, **kwargs)))
                         attrs.append({name: getattr(self, name, None) for name in tuple(mean) + tuple(worst) + tuple(rss)})
             finally:
-                self.regime, self.belief = saved, belief
+                self.regime, self.belief, self._beliefRegime = saved, belief, None
             for name in mean:
                 if all(a[name] is not None for a in attrs):
                     setattr(self, name, sum(w * a[name] for (w, _), a in zip(parts, attrs)))
@@ -111,8 +111,10 @@ def _average(parts):
     for key, value in first.items():
         if isinstance(value, numbers.Number) and not isinstance(value, bool):
             out[key] = sum(w * r[key] for w, r in parts)
+        elif isinstance(value, dict):                                  # diagnostics: the worst case over the regimes
+            out[key] = {k: (sum if k == "numericalNodes" else max)(r[key][k] for _, r in parts) for k in value}
         else:
-            out[key] = value                                           # diagnostics of the first regime priced
+            out[key] = value
     if "protection" in out and "annuity" in out:                       # a ratio of two averages, not an average of ratios
         out["fairSpread"] = out["protection"] / out["annuity"]
     return out

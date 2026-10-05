@@ -24,6 +24,19 @@ def _choice(value, allowed, name):
     return label
 
 
+def _exerciseStyle(exercise):
+    """"european" or "american" from None, one of those two words, or a QuantLib EuropeanExercise or AmericanExercise.
+    Anything else is refused: reading an unrecognised exercise as European would drop the early-exercise right."""
+    if exercise is None:
+        return "european"
+    if isinstance(exercise, str):
+        return _choice(exercise, ("european", "american"), "exercise")
+    name = type(exercise).__name__
+    if name in ("EuropeanExercise", "AmericanExercise"):
+        return name[:-len("Exercise")].lower()
+    raise TypeError(f"exercise must be None, 'european', 'american' or a QuantLib European or American exercise; got {name}")
+
+
 def _schedule(times, name, after=None, minimum=1):
     """Payment or fixing times as given: finite, strictly increasing, and later than `after` when one is set. An
     unordered schedule is refused, not sorted, since sorting would hide the caller's mistake."""
@@ -170,7 +183,7 @@ class VanillaOption(Instrument):
         if maturity is None:
             raise ValueError("give the maturity in years or as a QuantLib Date")
         self.maturity = _years(maturity, dayCounter)
-        self.isAmerican = "American" in type(exercise).__name__ or str(exercise).lower() == "american"
+        self.isAmerican = _exerciseStyle(exercise) == "american"
 
     def payoffOnGrid(self, S):
         S = np.asarray(S, float)
