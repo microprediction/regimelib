@@ -41,21 +41,24 @@ class SwitchingEquityRates(SwitchingModel):
         c = 1 - 1j * w
         R = self.rates
         if isinstance(R, SwitchingVasicek):
-            gr, gfr, pre_r = _m.gaussian_factors([R.a], [R.b], [R.sigma], [[[1.0]]] * self.n, [c])
+            gr, gfr, pre_r = _m.gaussian_factors([R.a], [R.b], [R.sigma], [[[1.0]]] * self.n, [c], T)
             pre = pre_r(T, [R.r0])
         else:
-            gr, gfr, pre_r = _m.gaussian_factors([R.a], [[0.0] * self.n], [R.sigma], [[[1.0]]] * self.n, [c])
+            gr, gfr, pre_r = _m.gaussian_factors([R.a], [[0.0] * self.n], [R.sigma], [[[1.0]]] * self.n, [c], T)
             pre = R.deterministicDiscount(0.0, T) ** c                        # exp((i w - 1) int phi)
         ge, gfe, pre_e = self.equity.returnForcing(w, T)
         if self.rho:
-            B = ExpSum({0: 1 / R.a, R.a: -1 / R.a})
+            B, Bf = _m.loading(R.a, 0.0, T)                                   # a Chebyshev series near zero reversion
             sS = np.atleast_1d(np.asarray(self.equity.sigma, float)); sR = np.atleast_1d(np.asarray(R.sigma, float))
-            ge = [ge[i] + B.scale(-c * 1j * w * self.rho * float(sS[i]) * float(sR[i])) for i in range(self.n)]
-            gfe = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in ge]
+            cross = [-c * 1j * w * self.rho * float(sS[i]) * float(sR[i]) for i in range(self.n)]
+            if type(B) is not type(ge[0]):                                    # one representation before adding
+                ge = [Cheb.fit(f, T, 80) for f in gfe]; B = Cheb.fit(Bf, T, 24) if not isinstance(B, Cheb) else B
+            ge = [ge[i] + B.scale(cross[i]) for i in range(self.n)]
+            gfe = [(lambda f, x: (lambda t: f(t) + x * Bf(t)))(gfe[i], cross[i]) for i in range(self.n)]
         if type(gr[0]) is not type(ge[0]):
             gr = [Cheb.fit(f, T, 80) for f in gfr]; ge = [Cheb.fit(f, T, 80) for f in gfe]
         g = [gr[i] + ge[i] for i in range(self.n)]
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        gfuncs = [(lambda fr, fe: (lambda t: fr(t) + fe(t)))(gfr[i], gfe[i]) for i in range(self.n)]
         factor = pre * pre_e() * self.S0 ** (1j * w) * cmath.exp(-1j * w * self.q * T)
         return g, gfuncs, factor
 

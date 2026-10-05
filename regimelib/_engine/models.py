@@ -45,6 +45,16 @@ def loading(kappa, c=0.0, T=None):
     return ExpSum({0: 1 / kappa, kappa: c - 1 / kappa}), f
 
 
+def refuse_hidden_variance(var, volatilities, what):
+    """The inverters size their Fourier range from the stationary variance of the state. On a chain whose stationary
+    law gives no weight to the regimes that diffuse (a volatile regime that is left for good), that variance is zero
+    while the state still diffuses on the way: there is no range to size, and no deterministic shortcut either."""
+    if var <= 0.0 and any(v != 0.0 for v in np.ravel(volatilities)):
+        raise NotImplementedError(
+            f"{what}: every regime with a volatility has zero stationary probability, so the state diffuses only until "
+            "the chain leaves those regimes for good. This case is not priced; give the lasting regimes a volatility.")
+
+
 def loadings(specs, T):
     """`loading` for several (kappa, c) at once, in one representation so that they can be multiplied: Chebyshev
     series for all of them if kappa T is small for any, exponential sums otherwise."""
@@ -143,12 +153,13 @@ def heston_switching_theta(u, kappa, thetas, xi, rho, T):
     """Log-price X with dX = -v/2 dt + sqrt(v) dW, dv = kappa (theta[y] - v) dt + xi sqrt(v) dZ, corr rho.
     E[exp(i u X_T)] = exp(i u X_0 + D(T) v_0) a_i(T), with D the Heston Riccati solution (regime free) and
     g_i = kappa theta_i D."""
-    d = cmath.sqrt((rho * xi * 1j * u - kappa) ** 2 + xi ** 2 * (1j * u + u * u))
-    gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
+    if xi != 0.0:
+        d = cmath.sqrt((rho * xi * 1j * u - kappa) ** 2 + xi ** 2 * (1j * u + u * u))
+        gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
 
     def D(t):
         if xi == 0.0:                         # no vol-of-vol: the Riccati equation is linear, D' = -kappa D - (u^2 + iu)/2
-            return -0.5 * (u * u + 1j * u) * (1 - cmath.exp(-kappa * t)) / kappa
+            return -0.5 * (u * u + 1j * u) * stable_B(kappa, t)
         e = cmath.exp(-d * t)
         return (kappa - rho * xi * 1j * u - d) / xi ** 2 * (1 - e) / (1 - gm * e)
     gfuncs = [(lambda th: (lambda t: kappa * th * D(t)))(th) for th in thetas]
