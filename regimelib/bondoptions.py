@@ -7,12 +7,12 @@ import math
 import cmath
 import numpy as np
 from scipy.optimize import brentq
-from ._engine.options import _kronrod_nodes, _terminal_vectors
+from ._engine.options import _kronrod_nodes, _terminal_vectors, settled
 from ._engine.models import vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
 
 
-def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, tol=1e-10, panels=None):
+def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, tol=1e-10, panels=None, solve=None):
     """Call expiring at T, strike K, on a bond paying c_k at S_k > T (cashflows: list of (S_k, c_k)), under
     dx = kappa (theta_y - x) dt + sigma_y dW. order=None uses the numerical solution; an integer the expansion."""
     Q = np.asarray(Q, float); m = len(thetas)
@@ -23,9 +23,11 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
         U = 8 / math.sqrt(var)
     ET = math.exp(-kappa * T); mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)
 
-    def a_vec(t, c, a0):
+    def a_vec(t, c, a0, numerical=True):
         g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c, t)
-        a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0) if order is None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        a = None if order is None else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        if a is None and numerical:
+            a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         return a, Bc.value(t)
     bs = [stable_B(kappa, S - T) for S, _ in cashflows]
     A = [a_vec(S - T, 0.0, np.ones(m))[0].real for S, _ in cashflows]          # A[k][j]: bond k factor in regime j
@@ -53,22 +55,38 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
         for k, (S, c) in enumerate(cashflows):
             cases.append((j, bs[k], c * A[k][j]))                                # A_kj e^{-b_k x} 1{x < x*_j}
         cases.append((j, 0.0, -K))                                                # -K 1{x < x*_j}
+    th = np.asarray(thetas, float)
+    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET),
+                   float(np.max(np.asarray(sigmas, float) ** 2)) * ou_variance(kappa, T), max(bs))
     price = 0.0
     for j, c0, weight in cases:
         a, Bv = a_vec(T, c0, np.eye(m)[j])
-        price += weight * 0.5 * (a[start] * cmath.exp(-Bv * x0)).real
-    rate = max(abs(xs - mean_xT) for xs in xstar) + math.sqrt(var)
+        price += weight * (0.5 if sure[j] is None else sure[j]) * (a[start] * cmath.exp(-Bv * x0)).real
+    cases = [case for case in cases if sure[case[0]] is None]
+    if not cases:
+        return price
+    rate = max(abs(xs - mean_xT) for xs, known in zip(xstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan); nu = len(us)
-        if order is None:
+        avals = None
+        if order is not None and not blownUp:
+            avals = np.empty((len(cases), nu), complex)
+            for k, (j, c0, _) in enumerate(cases):
+                for n, u in enumerate(us):
+                    value = a_vec(T, c0 - 1j * u, np.eye(m)[j], numerical=False)[0]
+                    if value is None:
+                        blownUp = True; break                           # one method for every node: see _solver
+                    avals[k, n] = np.asarray(value)[start]
+                if blownUp:
+                    avals = None; break
+        if avals is None:
             cs = np.concatenate([c0 - 1j * us for _, c0, _ in cases])
             A0 = np.zeros((m, len(cases) * nu), complex)
             for kk, (j, _, _) in enumerate(cases):
                 A0[j, kk * nu:(kk + 1) * nu] = 1.0
             avals = _terminal_vectors(T, Q, kappa, thetas, sigmas, cs, A0)[start].reshape(len(cases), nu)
-        else:
-            avals = np.array([[a_vec(T, c0 - 1j * u, np.eye(m)[j])[0][start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for kk, (j, c0, weight) in enumerate(cases):
             Bv = (c0 - 1j * us) * ET + stable_B(kappa, T)

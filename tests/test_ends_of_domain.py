@@ -62,7 +62,8 @@ def test_nonpositive_strikes_on_equity(K):
         assert price(rl.VanillaOption(("asset", "call", K), maturity=T), engine) == pytest.approx(100.0 * dq)
         assert price(rl.VanillaOption(("asset", "put", K), maturity=T), engine) == 0.0
         asian = rl.ContinuousGeometricAsianOption(("call", K), maturity=T)
-        forward = price(rl.ContinuousGeometricAsianOption(("call", 1e-9), maturity=T), engine)
+        ordinary = lambda kind: price(rl.ContinuousGeometricAsianOption((kind, 80.0), maturity=T), engine)
+        forward = ordinary("call") - ordinary("put") + 80.0 * dr           # parity at a strike that is quick to price
         assert price(asian, engine) == pytest.approx(forward - K * dr, rel=1e-6)
         assert price(rl.ContinuousGeometricAsianOption(("put", K), maturity=T), engine) == 0.0
     rates = rl.SwitchingVasicek(CHAIN, 0.03, 0.5, [0.06, 0.02], [0.015, 0.008])

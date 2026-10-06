@@ -37,6 +37,15 @@ terms of ``log P``, kept apart), ``.price``, ``.greek(...)`` and ``.evaluate(exp
 The other models have their closed forms written out, and evaluated in numpy, on their pages under
 :doc:`../models/index`; they are not yet sympy classes.
 
+Evaluating a formula
+--------------------
+
+The antiderivatives divide by powers of the reversion speed (and of the CIR volatility, or of the jump mean), and
+their terms cancel: at :math:`\kappa T` near :math:`10^{-5}` a formula that is exactly right has no correct digit in double precision. So
+``evaluate`` works at 50 digits and returns a float, and it refuses a formula where :math:`\kappa T`,
+:math:`\sigma T` (CIR) or :math:`m T` (the jump mean) is below :math:`10^{-4}`, including zero. Those limits are
+different formulas (no reversion, no diffusion, no jumps); ``FastSwitchingEngine(model, order=1)`` prices them.
+
 Two regimes, second order
 -------------------------
 

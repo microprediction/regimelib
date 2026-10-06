@@ -159,6 +159,12 @@ class SwitchingEngine:
     def _diagnosticsReplay(self, contribution):
         pass
 
+    def _solver(self):
+        """How the bond-option integrators expand at a node: a function returning a(t), or None where the series
+        has blown up. Their quadrature refines until two rules agree, which needs one smooth integrand, so on a None
+        they solve every node numerically. None here: they expand without that test."""
+        return None
+
     # a(T) for the reduced system; subclasses choose the method
     def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
@@ -322,45 +328,51 @@ class SwitchingEngine:
     def _bondOption(self, opt):
         m = self.model; T, S, K = opt.maturity, opt.bondMaturity, opt.strike
         if isinstance(m, SwitchingVasicek):
-            call = zcb_call(T, S, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+            call = zcb_call(T, S, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingHullWhite):
             # r = x + phi(t): P(T, S) = c P_x(T, S) with c = exp(-int_T^S phi), and the discount to T carries
             # exp(-int_0^T phi), so the call is exp(-int_0^T phi) c Call_x(strike K / c) under the zero-mean factor.
             a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T)); c = m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))
-            call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+            call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingG2):
             e0T, c = m.deterministicDiscount(0.0, T), m.deterministicDiscount(T, S)
-            call = e0T * c * g2_zcb_call(T, S, K / c, self.regime, m.a, m.b, m.sigma, m.eta, m.rho, m.chain.generator, order=self._order())
+            call = e0T * c * g2_zcb_call(T, S, K / c, self.regime, m.a, m.b, m.sigma, m.eta, m.rho, m.chain.generator, order=self._order(), solve=self._solver())
         else:
             raise TypeError("bond options are priced under SwitchingVasicek, SwitchingHullWhite or SwitchingG2")
         if opt.isCall:
             return call
         bond = lambda t: self.calculate(ZeroCouponBond(t))          # put-call parity: C - P = P(0,S) - K P(0,T)
-        return call - bond(S) + K * bond(T)
+        return max(call - bond(S) + K * bond(T), 0.0)               # rounding in the parity, when the put is worthless
 
     def _couponBondOption(self, isCall, K, T, cashflows):
         """Under Hull-White the deterministic curve factor scales each cash flow: c_k -> c_k D(S_k)/D(T) e^{-(shift(S_k) - shift(T))}
         in the zero-mean factor model, and the discount to expiry carries exp(-int_0^T phi)."""
         m = self.model
         if isinstance(m, SwitchingVasicek):
-            call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+            call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingHullWhite):
             a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T))
             scaled = [(S, c * m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))) for S, c in cashflows]
-            call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+            call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         else:
             raise TypeError("coupon-bond options, swaptions and caps are priced under SwitchingVasicek or SwitchingHullWhite")
         if isCall:
             return call
         bond = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in cashflows)       # parity: C - P = bond - K P(0,T)
-        return call - bond + K * self.calculate(ZeroCouponBond(T))
+        return max(call - bond + K * self.calculate(ZeroCouponBond(T)), 0.0)
 
     def _cds(self, cds):
         """Survival Q(t) is the model's bond price; premium leg = s sum tau_i D(t_i) Q(t_i) (+ accrual to the mid-point
         on default), protection = (1 - R) sum D(t_mid) (Q(t_{i-1}) - Q(t_i))."""
-        Q = lambda t: 1.0 if t <= 0 else self._survival(t)
+        known = {}                                                   # each date ends one period and starts the next
+        def Q(t):
+            if t <= 0:
+                return 1.0
+            if t not in known:
+                known[t] = self._survival(t)
+            return known[t]
         D = cds.discount; annuity = prot = 0.0; t0 = 0.0            # the annuity is the premium leg per unit spread
         for t1 in cds.times:
             tau = t1 - t0; tm = 0.5 * (t0 + t1); q0, q1 = Q(t0), Q(t1)
@@ -550,7 +562,7 @@ class FastSwitchingEngine(SwitchingEngine):
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
 
-    def _aVector(self, g, gfuncs, T, a0=None):
+    def _aVector(self, g, gfuncs, T, a0=None, fallback=True):
         """a(T) over all regimes through the engine's order, with the size of the last two terms recorded for the
         convergence diagnostics. The series is asymptotic in the holding time times the forcing, so at Fourier nodes
         where the forcing is large it diverges (non-finite, far from the averaged value, or a last term no smaller than
@@ -571,17 +583,29 @@ class FastSwitchingEngine(SwitchingEngine):
                 avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
         i = self.regime
         finite = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
+        # terms that overflow in the exponent underflow the value to zero, order after order, and then agree: not agreement
+        finite = finite and not (abs(base[i]) > 1e-300 and abs(avec[i]) < 1e-3 * abs(base[i]))
+        self._diag["nodes"] += 1
         matters = abs(base[i]) > 1e-8 * self._diag.get("phiScale", 1.0)
         if finite:
             scale = max(abs(avec[i]), 1e-300)
-            last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
-            diverging = N >= 2 and last >= before and last > 1e-12
+            with np.errstate(all="ignore"):                             # a huge last term is the finding, not a warning
+                last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
+            diverging = (N >= 2 and last >= before and last > 1e-12) or not math.isfinite(last)
+            diverging = diverging or (N >= 1 and max(last, before) > 0.5)    # a term half the size of the value
         else:
             last, diverging = math.inf, True
+        if not fallback:
+            # the caller keeps one method across its nodes, and leaves the expansion only where it has blown up outright:
+            # a term that stopped shrinking at a frequency where the transform is negligible does it no harm
+            diverging = not (np.all(np.isfinite(avec)) and abs(avec[i]) <= 1e3 * max(abs(base[i]), 1.0))
+            last = last if math.isfinite(last) else 0.0
         if diverging:
             self._diag["numericalNodes"] += 1
             if matters:
                 self._diag["numericalWeight"] = max(self._diag["numericalWeight"], float(abs(base[i])))
+            if not fallback:
+                return None, None                                        # the caller solves all of its nodes numerically
             avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
         elif matters:
             self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
@@ -590,6 +614,9 @@ class FastSwitchingEngine(SwitchingEngine):
 
     def _a(self, g, gfuncs, T, a0=None):
         return self._aVector(g, gfuncs, T, a0)[0][self.regime]
+
+    def _solver(self):
+        return lambda g, gfuncs, t, a0: self._aVector(g, gfuncs, t, a0, fallback=False)[0]
 
     def _order(self):
         if self.model.n == 1:
@@ -610,7 +637,7 @@ class FastSwitchingEngine(SwitchingEngine):
             return None
         d = self._diag
         return dict(lastTerm=d["lastTerm"] if d["lastTerm"] > before["lastTerm"] else 0.0,
-                    numericalNodes=d["numericalNodes"] - before["numericalNodes"],
+                    numericalNodes=d["numericalNodes"] - before["numericalNodes"], nodes=d["nodes"] - before["nodes"],
                     numericalWeight=d["numericalWeight"] if d["numericalWeight"] > before["numericalWeight"] else 0.0)
 
     def _diagnosticsReplay(self, contribution):
@@ -618,13 +645,22 @@ class FastSwitchingEngine(SwitchingEngine):
         if d is None or contribution is None:
             return
         d["lastTerm"] = max(d["lastTerm"], contribution["lastTerm"])
-        d["numericalNodes"] += contribution["numericalNodes"]
+        d["numericalNodes"] += contribution["numericalNodes"]; d["nodes"] += contribution["nodes"]
         d["numericalWeight"] = max(d["numericalWeight"], contribution["numericalWeight"])
 
     @byBelief(worst=("orderUsed", "lastIncrement"))
     def calculate(self, instrument, results=False):
-        self._diag = dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0)
-        out = self._calculateOrders(instrument)
+        if getattr(self, "_inside", False):
+            # a bond inside a swap, a cap or a parity relation: part of the instrument being priced, at its order, with
+            # its diagnostics and its one set of warnings
+            out = SwitchingEngine.calculate(self, instrument, results=True)
+            return out if results else out["value"]
+        self._diag = self._freshDiagnostics()
+        self._inside = True
+        try:
+            out = self._calculateOrders(instrument)
+        finally:
+            self._inside = False
         eps = self.model.chain.meanHoldingTime()
         d = dict(epsilon=eps, orderUsed=self.orderUsed, lastTermRelative=self._diag["lastTerm"],
                  numericalNodes=self._diag["numericalNodes"])
@@ -644,27 +680,41 @@ class FastSwitchingEngine(SwitchingEngine):
                           "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=3)
         return out if results else out["value"]
 
+    @staticmethod
+    def _freshDiagnostics():
+        return dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0, nodes=0)
+
     def _calculateOrders(self, instrument):
         if self.order is not None:
             self.orderUsed = self.order; return super().calculate(instrument, results=True)
-        prev, prev_inc, prev_out = None, None, None
+        prev, prev_inc, prev_out, prev_diag = None, None, None, None
         for n in range(0, self.maxOrder + 1):
             self.order = n
+            self._diag = self._freshDiagnostics()                        # those of this order, not of the ones discarded
             try:
                 out = super().calculate(instrument, results=True)
             finally:
                 self.order = None
             v = out["value"]
+            if self._diag["nodes"] and self._diag["numericalNodes"] == self._diag["nodes"]:
+                # the series diverged wherever it was used and the reduced system was solved instead: that is the
+                # value, not a term of the series to be compared with the one before
+                self.orderUsed, self.lastIncrement = n, 0.0
+                return out
             if prev is not None:
                 inc = abs(v - prev) / max(abs(v), 1e-300)
-                if inc <= self.tol or (prev_inc is not None and inc > prev_inc):
-                    keep = out if inc <= self.tol else prev_out
-                    self.orderUsed, self.lastIncrement = (n if inc <= self.tol else n - 1), min(inc, prev_inc or inc)
-                    if inc > self.tol:
-                        self._diag["notDecreasing"] = True
-                    return keep
+                # two increments in a row within the tolerance: one alone can be a correction that cancels at this
+                # maturity and starting regime while the next does not
+                if inc <= self.tol and prev_inc is not None and prev_inc <= self.tol:
+                    self.orderUsed, self.lastIncrement = n, inc
+                    return out
+                if prev_inc is not None and inc > prev_inc:
+                    self.orderUsed, self.lastIncrement = n - 1, prev_inc
+                    self._diag = prev_diag
+                    self._diag["notDecreasing"] = prev_inc > self.tol or inc > 1e3 * self.tol
+                    return prev_out
                 prev_inc = inc
-            prev, prev_out = v, out
+            prev, prev_out, prev_diag = v, out, self._diag
         self.orderUsed, self.lastIncrement = self.maxOrder, prev_inc
         return prev_out
 
