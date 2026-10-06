@@ -24,6 +24,8 @@ def compensated_jump(u, mu_j, sig_j):
     b = mu + sig^2 / 2 the first-order parts combine exactly, a - i u b = -(u^2 + i u) sig^2 / 2, so a small jump
     keeps its second-order size instead of losing it in the difference of two numbers of size mu."""
     a, b = 1j * u * mu_j - 0.5 * u * u * sig_j ** 2, mu_j + 0.5 * sig_j ** 2
+    if b > 700.0:
+        raise ValueError(f"the mean jump factor exp(logJumpMean + logJumpVol^2 / 2) = exp({b:g}) overflows")
     return _expm1_less_x(a) - 1j * u * _expm1_less_x(b) - 0.5 * (u * u + 1j * u) * sig_j ** 2
 
 

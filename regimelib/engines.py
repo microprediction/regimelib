@@ -481,10 +481,10 @@ class SwitchingEngine:
             else:
                 dphi = prev * dvec[self.regime]
             It += w * (cmath.exp(1j * u * k) * ((0.5 + 1j * u) * mu * phi + dphi)).real / (u * u + 0.25)
-        disc = math.exp(-m.r * T); root = math.sqrt(F * K)
+        disc = math.exp(-m.r * T); root = math.sqrt(F) * math.sqrt(K)      # not sqrt(F K): the product can overflow
         call = disc * (F - root / math.pi * I0)
         delta = disc * dF * (1 - root / (math.pi * F) * I1)
-        gamma = disc * dF * dF * root / (math.pi * F * F) * I2
+        gamma = disc * (dF / F) * root / math.pi * I2 * (dF / F)    # in this order: neither F^2 nor 1 / F^2 is formed
         dC_dT = -m.r * call + disc * (mu * F - root / math.pi * It)
         rho = -T * call + disc * T * (F - root / math.pi * I1)
         out = dict(value=call, delta=delta, gamma=gamma, theta=-dC_dT, rho=rho)
@@ -494,6 +494,10 @@ class SwitchingEngine:
             out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
             out["theta"] = -(dC_dT - (-m.r * disc * (F - K) + disc * mu * F))
             out["rho"] = rho - T * K * disc
+        if getattr(self, "_left", 0.0) > 1e-2:
+            # gamma's integrand is the transform itself, with no 1 / u^2: where that has not decayed the density at the
+            # strike is not resolved (it may be infinite), and a number here would be the truncation
+            del out["gamma"]
         # the absolute error of the integral is all that is left of a value far out of the money
         out["value"] = max(out["value"], disc * (F - K) * (1.0 if opt.isCall else -1.0), 0.0)
         return out
@@ -560,6 +564,14 @@ class SwitchingEngine:
             return abs(pre() * _numericalAVector(Q, g, gfuncs, T, 1e-10)[self.regime])
         while m.n > 1 and U < 1e4 and actual(U) > 1e-12:
             U *= 2
+        left = max(size(U), actual(U) if m.n > 1 else 0.0)
+        if left > 1e-7 * U:
+            # the price integrand is the transform over u^2, so what is cut off is about left / U of the spot
+            raise ArithmeticError(f"the characteristic function is still {left:.2g} at u = {U:g}, the largest frequency "
+                                  "integrated: the law has an atom (jumps with no diffusion in some regime) or a density "
+                                  "too peaked to invert (a very small volatility, or a variance-gamma maturity far below "
+                                  "nu). The transform engines do not price this; give the regime a volatility.")
+        self._left = left * U                                    # of the undamped integrals (gamma), what is cut off
         return U
 
     def _nodeCount(self, U, k):
@@ -605,7 +617,7 @@ class FastSwitchingEngine(SwitchingEngine):
         base = np.ones(self.model.n, complex); later = None
         with np.errstate(all="ignore"):
             try:
-                if rare:
+                if rare or any(getattr(gi, "unresolved", 0.0) > 1e-9 for gi in g):   # or a forcing its series misses
                     raise ValueError
                 fs = FastSwitch(Q, g, order=N + 1, a0=a0)
                 base = np.asarray(fs.a(T, 0), complex)

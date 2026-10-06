@@ -155,6 +155,8 @@ def heston_switching_theta(u, kappa, thetas, xi, rho, T):
     g_i = kappa theta_i D."""
     if xi != 0.0:
         d = cmath.sqrt((rho * xi * 1j * u - kappa) ** 2 + xi ** 2 * (1j * u + u * u))
+        if kappa - rho * xi * 1j * u + d == 0:    # at u = -i with rho xi > kappa: the other root, for which D = 0 there
+            d = -d
         gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
 
     def D(t):
