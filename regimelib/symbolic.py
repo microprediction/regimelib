@@ -4,7 +4,7 @@ Two regimes switching at rate lam each way, Vasicek short rate dr = kappa (theta
 bond to second order in eps = 1 / lam (the regime-switching page of homogenization.microprediction.org):
 
     log P_{1,2}(T) = -B r0 + int_0^T gbar + (eps/2) int_0^T gt^2 - (eps^2/8) gt(T)^2
-                     + log(1 +/- (eps/2) gt(T) -/+ (eps^2/4) gt'(T)),
+                     + log(1 +/- (eps/2) gt(T) -/+ (eps^2/4) (gt'(T) - gt'(0) e^{-2 lam T})),
     g_i = -kappa theta_i B + sigma_i^2 B^2 / 2,  gbar = (g_1 + g_2)/2,  gt = (g_1 - g_2)/2,  B = (1 - e^{-kappa T}) / kappa,
 
 with the upper sign for a start in regime 1. Every greek is sympy.diff of this expression."""
@@ -52,7 +52,7 @@ class VasicekTwoStateBond:
         eps = 1 / lam
         I_gbar = sp.integrate(sp.expand(gbar), (t, 0, T))
         I_gt2 = sp.integrate(sp.expand(gt ** 2), (t, 0, T))
-        gtT, gtpT = gt.subs(t, T), sp.diff(gt, t).subs(t, T)
+        gtT, gtpT, gtp0 = gt.subs(t, T), sp.diff(gt, t).subs(t, T), sp.diff(gt, t).subs(t, 0)
         BT = B.subs(t, T)
         # the terms of log P, kept apart so that a greek can be read term by term
         self.terms = {
@@ -60,7 +60,8 @@ class VasicekTwoStateBond:
             "averaged": I_gbar,                                         # the averaged Vasicek exponent
             "green_kubo": eps / 2 * I_gt2,                              # (eps/2) int gt^2: the first-order term
             "second_order": -eps ** 2 / 8 * gtT ** 2,                   # -(eps^2/8) gt(T)^2
-            "memory": sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * gtpT),   # the starting regime
+            # the starting regime, with the initial layer that makes it nothing at T = 0 (gt(0) = 0 here)
+            "memory": sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * (gtpT - gtp0 * sp.exp(-2 * lam * T))),
         }
         self.B, self.gt, self.gbar = BT, gt, gbar
         self.logPrice = sum(self.terms.values())

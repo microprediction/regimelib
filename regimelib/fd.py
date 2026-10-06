@@ -188,6 +188,10 @@ class SwitchingFDEngine:
 
     def _barrier(self, opt):
         m, T = self.model, opt.maturity
+        if hasattr(m, "equity") and hasattr(m, "rates"):
+            # the knock-out grid ends at the barrier in log S for every rate, a boundary this routine does not build
+            raise NotImplementedError("barriers are not priced on the (log S, r) grid of an equity with stochastic rates; "
+                                      "with a deterministic rate (zero rate volatility, one level) they are")
         logGrid = hasattr(m, "sigma") and not hasattr(m, "beta")
         b = math.log(opt.barrier) if logGrid else opt.barrier
         x0 = math.log(m.S0) if logGrid else m.S0

@@ -40,6 +40,9 @@ class RegimeChain:
             raise ValueError("the generator must contain at least one regime")
         if not np.all(np.isfinite(Q)):
             raise ValueError("generator entries must be finite")
+        with np.errstate(over="ignore"):
+            if not np.isfinite(np.abs(Q).sum()):
+                raise ValueError("the rates are so large that their sum overflows; choose a larger unit of time")
         if np.any(Q - np.diag(np.diag(Q)) < 0):
             raise ValueError("off-diagonal rates must be nonnegative")
         # rows sum to zero relative to the size of the row's own rates, so the check does not depend on the time unit

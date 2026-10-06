@@ -410,12 +410,14 @@ class SwitchingEngine:
         U = 8.0
         while abs(psi(U - 0.5j)) > 1e-14 * K ** 0.5 and U < 1e4:
             U *= 2
-        k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(m.S0 / K)))
+        bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
+        # the integrand oscillates at the forward's moneyness, and the forward carries the dividends and the bond
+        forward = m.S0 * math.exp(-m.q * T) / bond
+        k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(forward / K)))
         I0 = sum(w * (cmath.exp(-1j * u * k) * psi(u - 0.5j)).real / (u * u + 0.25) for u, w in zip(us, ws))
         call = m.S0 * math.exp(-m.q * T) - math.sqrt(K) / math.pi * I0
         if opt.isCall:
             return {"value": call}
-        bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
         return {"value": call - m.S0 * math.exp(-m.q * T) + K * bond}
 
     def _geometricAsian(self, opt):
@@ -558,8 +560,15 @@ class FastSwitchingEngine(SwitchingEngine):
         if len(model.chain.closedClasses()) > 1:
             raise ValueError("the fast-switching expansion needs a chain with one stationary law; this one has "
                              f"{len(model.chain.closedClasses())} closed classes. Use NumericalSwitchingEngine.")
+        if model.n > 2:
+            rates = np.sort(np.abs(np.linalg.eigvals(model.chain.generator)))      # rates[0] is the stationary law's zero
+            if rates[1] < 1e-6 * rates[-1]:
+                raise ValueError("the fast-switching expansion is in the mean holding time, and this chain also has a mode "
+                                 f"that relaxes at rate {rates[1]:.3g} against a fastest of {rates[-1]:.3g}: it switches "
+                                 "fast within groups of regimes and slowly between them. Use NumericalSwitchingEngine.")
         order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
+        self._pi = model.chain.stationaryDistribution()
         self.orderUsed = self.lastIncrement = None
 
     def _aVector(self, g, gfuncs, T, a0=None, fallback=True):
@@ -572,15 +581,27 @@ class FastSwitchingEngine(SwitchingEngine):
         if self.model.n == 1:                                            # nothing to expand in: a = a0 exp(int g)
             avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
             return avec, Q @ avec + np.array([gi.value(T) for gi in g], complex) * avec
-        fs = FastSwitch(Q, g, order=N, a0=a0)
-        base = np.asarray(fs.a(T, 0), complex)
+        failures = (OverflowError, FloatingPointError, ValueError, ZeroDivisionError, np.linalg.LinAlgError)
+        # a terminal vector nearly orthogonal to the stationary law (a payoff in a rare regime) is expanded as the
+        # difference of two solutions near one, which loses it: solve instead
+        rare = a0 is not None and abs(self._pi @ np.asarray(a0)) < 1e-6 * np.max(np.abs(a0))
+        base = np.ones(self.model.n, complex); later = None
         with np.errstate(all="ignore"):
             try:
+                if rare:
+                    raise ValueError
+                fs = FastSwitch(Q, g, order=N + 1, a0=a0)
+                base = np.asarray(fs.a(T, 0), complex)
                 avec = np.asarray(fs.a(T, N), complex)
                 prev = np.asarray(fs.a(T, N - 1), complex) if N >= 1 else base
                 prev2 = np.asarray(fs.a(T, N - 2), complex) if N >= 2 else prev
-            except (OverflowError, FloatingPointError, ValueError):
+            except failures:
                 avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
+            else:
+                try:
+                    later = np.asarray(fs.a(T, N + 1), complex)
+                except failures:
+                    later = None
         i = self.regime
         finite = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
         # terms that overflow in the exponent underflow the value to zero, order after order, and then agree: not agreement
@@ -606,11 +627,21 @@ class FastSwitchingEngine(SwitchingEngine):
                 self._diag["numericalWeight"] = max(self._diag["numericalWeight"], float(abs(base[i])))
             if not fallback:
                 return None, None                                        # the caller solves all of its nodes numerically
-            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0); later = None
         elif matters:
             self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
         gT = np.array([gi.value(T) for gi in g], complex)
-        return avec, Q @ avec + gT * avec
+        # da/dT = (Q + diag g) a holds for the solution, and Q is of the size of 1 / epsilon: applied to a truncation
+        # it loses an order (all of it at order zero, where Q 1 = 0). At order zero the derivative is the averaged
+        # forcing times a; above it one more term in the state restores the order, where that term is still small.
+        if later is None:
+            return avec, Q @ avec + gT * avec                            # solved numerically: the equation holds
+        if N == 0:
+            return avec, (self._pi @ gT) * avec
+        with np.errstate(all="ignore"):
+            small = np.all(np.isfinite(later)) and abs(later[i] - avec[i]) <= 0.5 * abs(avec[i])
+        state = later if small else avec
+        return avec, Q @ state + gT * state
 
     def _a(self, g, gfuncs, T, a0=None):
         return self._aVector(g, gfuncs, T, a0)[0][self.regime]
