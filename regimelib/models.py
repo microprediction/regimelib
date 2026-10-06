@@ -431,6 +431,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
     model lives in the first-order tier: FirstOrderFDEngine on the (log S, v) grid, SwitchingFDReferee for the
     switching solution."""
     _diffusion, _switching = ("xi",), ("xi",)          # see regimelib.information
+    defaultGrid = (151, 61)                            # (log price, variance) nodes when an engine is given none
 
     def __init__(self, chain, S0, r, q, v0, kappa, theta, xi, rho):
         super().__init__(chain)
@@ -534,6 +535,9 @@ class SwitchingCEVProcess(SwitchingModel):
     def operators(self, instrument, n, width, stretch=None):
         from .firstorder import Grid1D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
+        if K <= 0:
+            raise ValueError("the CEV price can reach zero and stay there, which a grid cut off above zero does not "
+                             "carry; a strike at or below zero is not priced under this model")
         s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
         vol_eff = math.sqrt(max(s2)) * self.S0 ** (self.beta - 1)
         L = width or 6 * vol_eff * math.sqrt(T) * self.S0 + 2 * abs(self.r - self.q) * T * self.S0

@@ -108,11 +108,22 @@ class Grid2D:
         return float(f([p])[0])
 
 
+def _gridSize(model, n):
+    """The node count when none is given: 801 on a line; for a model on a plane its own tested default, since 801 in
+    each direction is 640,000 nodes per regime. A scalar given for a plane is refused when it is that large."""
+    planar = getattr(model, "defaultGrid", None)
+    if n is None:
+        return planar or 801
+    if planar is not None and np.isscalar(n) and n * n > 250000:
+        raise ValueError(f"n = {n} in each of two directions is {n * n} nodes per regime; give n as (nx, nv), e.g. {planar}")
+    return n
+
+
 class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""
-    def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03, stretch=None):
-        self.model, self.n, self.width, self.stretch = model, n, width, stretch
+    def __init__(self, model, regime=0, n=None, width=None, warnAbove=0.03, stretch=None):
+        self.model, self.n, self.width, self.stretch = model, _gridSize(model, n), width, stretch
         self.regime, self.belief = startingBelief(regime, model.n)
         self.averaged = self.correction = self.memory = None
         self.warnAbove = warnAbove; self.diagnostics = {}
@@ -152,8 +163,8 @@ class FirstOrderFDEngine:
 
 class SwitchingFDReferee:
     """The switching model solved without expansion on the same grid: u_i' = L_i u_i + sum_j Q_ij u_j."""
-    def __init__(self, model, regime=0, n=801, width=None, stretch=None):
-        self.model, self.n, self.width, self.stretch = model, n, width, stretch
+    def __init__(self, model, regime=0, n=None, width=None, stretch=None):
+        self.model, self.n, self.width, self.stretch = model, _gridSize(model, n), width, stretch
         self.regime, self.belief = startingBelief(regime, model.n)
 
     @byBelief()

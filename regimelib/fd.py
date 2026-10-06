@@ -70,20 +70,20 @@ class SwitchingFDEngine:
         """Spot greeks from the regime block; the grid is in log price for Black-Scholes, in price for CEV. On a
         two-dimensional grid (log S, r) the derivatives are taken along log S at the starting rate."""
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
+        S0 = self.model.S0
         if hasattr(grid, "gx"):                                          # Grid2D: (log S, second factor)
             u2 = v[blk].reshape(len(grid.x), len(grid.v)); j = int(np.argmin(abs(grid.v - x0[1])))
-            u, h = u2[:, j], grid.gx.h; i = int(np.argmin(abs(grid.x - x0[0]))); S0 = self.model.S0
-            ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
-            theta = -(Big @ v)[blk].reshape(len(grid.x), len(grid.v))[i, j]
+            ux, uxx = _localDerivatives(grid.x, u2[:, j], x0[0])
+            theta = -grid.interp((Big @ v)[blk], x0)
             return {"value": grid.interp(v[blk], x0), "delta": ux / S0, "gamma": (uxx - ux) / (S0 * S0), "theta": theta}
-        u = v[blk]; h = grid.h; i = int(np.argmin(abs(grid.x - x0)))
-        ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
-        S0 = self.model.S0; logGrid = abs(math.exp(grid.x[i]) - S0) < abs(grid.x[i] - S0)
+        u = v[blk]
+        ux, uxx = _localDerivatives(grid.x, u, x0)
+        logGrid = abs(x0 - math.log(S0)) < abs(x0 - S0)                  # the state is log S or S
         if logGrid:
             delta, gamma = ux / S0, (uxx - ux) / (S0 * S0)
         else:
             delta, gamma = ux, uxx
-        theta = -(Big @ v)[blk][i]                                       # dV/dt = -L V in calendar time
+        theta = -grid.interp((Big @ v)[blk], x0)                         # dV/dt = -L V in calendar time
         return {"value": grid.interp(u, x0), "delta": delta, "gamma": gamma, "theta": theta}
 
     def calculate(self, instrument, results=False):
@@ -108,7 +108,7 @@ class SwitchingFDEngine:
         those directly. A G2 model with one factor's volatility identically zero is the one-factor Hull-White model
         in the other factor, and is solved as such."""
         from .engines import NumericalSwitchingEngine, _noDiffusion, deterministicEquity
-        from .models import SwitchingG2, SwitchingHullWhite
+        from .models import SwitchingG2, SwitchingHullWhite, SwitchingBlackScholesProcess
         from .hybrid import SwitchingEquityRates
         from .instruments import ZeroCouponBond
         m = self.model
@@ -116,6 +116,18 @@ class SwitchingFDEngine:
         if rate and _noDiffusion(m) == "switching level":
             from .engines import _atoms
             raise _atoms("an option on a bond or a swap")
+        if isinstance(m, SwitchingEquityRates) and isinstance(instrument, VanillaOption):
+            R = m.rates
+            if np.all(np.asarray(R.sigma, float) == 0.0):               # the rate has no noise: is its path constant?
+                level = set(getattr(R, "b", [None]))
+                constant = hasattr(R, "r0") and hasattr(R, "b") and (R.a == 0.0 or level == {R.r0})
+                if not constant or not isinstance(m.equity, SwitchingBlackScholesProcess):
+                    raise NotImplementedError("the equity-with-rates grid needs a rate that diffuses; with a "
+                                              "deterministic rate that is not constant this case is not priced")
+                flat = SwitchingBlackScholesProcess(m.chain, m.S0, R.r0, m.q, m.equity.sigma)
+                n = self.n[0] if isinstance(self.n, tuple) else self.n
+                engine = SwitchingFDEngine(flat, regime=start, n=n, steps=self.steps, information=self.information)
+                return engine.calculate(instrument, results=True)       # Black-Scholes at the constant rate
         if _noDiffusion(m) == "deterministic":
             if rate:
                 reduced = NumericalSwitchingEngine(m, regime=start, information="observed")
@@ -284,6 +296,18 @@ class SwitchingFDEngine:
         self.steps = steps
         p0 = float(self.belief[0]) if self.belief is not None else (1.0 if self.regime == 0 else 0.0)
         return {"value": grid.interp(u, (r0, p0))}
+
+
+def _localDerivatives(x, u, x0):
+    """First and second derivative at x0 of the parabola through the three nodes around it. The three are interior to
+    the grid, so next to a barrier (an end of the grid) the stencil is one-sided, and unequal spacing is handled."""
+    i = int(np.clip(np.searchsorted(x, x0), 1, len(x) - 2))
+    if i > 1 and abs(x[i - 1] - x0) < abs(x[i] - x0):
+        i -= 1
+    (a, b, c), (fa, fb, fc) = x[i - 1:i + 2], u[i - 1:i + 2]
+    la, lb, lc = fa / ((a - b) * (a - c)), fb / ((b - a) * (b - c)), fc / ((c - a) * (c - b))
+    ux = la * (2 * x0 - b - c) + lb * (2 * x0 - a - c) + lc * (2 * x0 - a - b)
+    return float(ux), float(2 * (la + lb + lc))
 
 
 def _exerciseTerms(inst):

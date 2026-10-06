@@ -231,9 +231,9 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
     def __init__(self):
         k, sig = self.k_, self.sig_
         h = sp.sqrt(k ** 2 + 2 * sig ** 2)
-        E = sp.exp(h * T)
-        BT = 2 * (E - 1) / ((h + k) * (E - 1) + 2 * h)
-        logA = sp.log(2 * h * sp.exp((h + k) * T / 2) / ((h + k) * (E - 1) + 2 * h))
+        q = sp.exp(-h * T)                                    # in e^{-hT}, which does not overflow at long maturities
+        BT = 2 * (1 - q) / ((h + k) * (1 - q) + 2 * h * q)
+        logA = sp.log(2 * h) + (k - h) * T / 2 - sp.log((h + k) * (1 - q) + 2 * h * q)
         I = {1: -2 / sig ** 2 * logA}
         I[2] = 2 / sig ** 2 * (T - k * I[1] - BT)
         self.h, self.B = h, BT

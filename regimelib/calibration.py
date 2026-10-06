@@ -16,6 +16,11 @@ class VolatilityHelper:
         self.volatility = float(volatility); self._engine = None
         if not math.isfinite(self.volatility) or self.volatility < 0:
             raise ValueError(f"volatility must be finite and nonnegative, got {self.volatility}")
+        T, K = self.option.maturity, self.option.strike               # elsewhere the Black price has no vega to fit
+        if not (math.isfinite(T) and T > 0):
+            raise ValueError(f"a Black-volatility helper requires a positive finite maturity, got {T}")
+        if not (math.isfinite(K) and K > 0):
+            raise ValueError(f"a Black-volatility helper requires a positive finite strike, got {K}")
 
     def setPricingEngine(self, engine):
         self._engine = engine; self.option.setPricingEngine(engine)
