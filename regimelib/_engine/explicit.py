@@ -91,10 +91,11 @@ def cir_int_B2(t, kappa, sigma):
 
 
 # ---------------------------------------------------------------- assembling
-def two_state_second_order(int_gbar, int_gt2, gt_T, gtp_T, eps, sign=+1):
-    """a_{1 or 2}(T) through eps^2 from the closed-form pieces (gt(0) = 0)."""
+def two_state_second_order(int_gbar, int_gt2, gt_T, gtp_T, eps, sign=+1, gtp_0=0.0, t=math.inf):
+    """a_{1 or 2}(T) through eps^2 from the closed-form pieces (gt(0) = 0). With gt'(0) and t the initial layer is
+    included, so that the two regimes agree at t = 0; without them it is the outer solution."""
     logm = int_gbar + eps / 2 * int_gt2 - eps ** 2 / 8 * gt_T ** 2
-    om = eps / 2 * gt_T - eps ** 2 / 4 * gtp_T
+    om = eps / 2 * gt_T - eps ** 2 / 4 * (gtp_T - (gtp_0 * math.exp(-2 * t / eps) if gtp_0 else 0.0))
     return cmath.exp(logm) * (1 + sign * om), logm, om
 
 

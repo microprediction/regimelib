@@ -20,6 +20,12 @@ on a bond or a swap refines its quadrature until two rules agree, which needs on
 the series unless that has blown up outright, and then solves every node numerically. The diagnostics and the
 warnings are those of the instrument priced and of the order kept, not of the bonds inside it or the orders tried.
 
+The expansion is in the mean holding time, so it is for a chain that mixes on that scale. A chain of three or more
+regimes with a mode a million times slower than its fastest (fast switching within groups, slow between them) is
+refused, and a payoff in a regime the stationary law gives less than a millionth is solved numerically. Theta at
+order zero is the maturity derivative of the order-zero price; above it, it is computed with one more term in the
+state, since the reduced equation applied to a truncation loses an order.
+
 .. code-block:: python
 
     engine = rl.FastSwitchingEngine(model, order=None, regime=0)

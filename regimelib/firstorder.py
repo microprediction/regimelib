@@ -3,7 +3,7 @@
 u_t = (L_bar + sum_j f~_j(y) A_j) u. To first order in the holding time,
     u(T) = e^{T L_bar} u0 + int_0^T e^{(T - s) L_bar} (sum_jk K_jk A_j A_k) e^{s L_bar} u0 ds + memory,
 K the Green-Kubo matrix of the chain (integral of the autocovariance of the coefficients) and the memory term
--(Q# f~)_i . A e^{T L_bar} u0 for a start in regime i. The Duhamel integral is the second block of one matrix
+-((I - e^{QT}) Q# f~)_i . A e^{T L_bar} u0 for a start in regime i (the e^{QT} part is the initial layer). The Duhamel integral is the second block of one matrix
 exponential of [[L_bar, 0], [K A A, L_bar]] applied to (u0, 0). Finite differences on a grid the model supplies."""
 import math
 import warnings
@@ -149,7 +149,10 @@ class FirstOrderFDEngine:
         Aug = sp.bmat([[Lbar, Z], [C, Lbar]], format="csc")
         v = expm_multiply(Aug * T, np.r_[u0, np.zeros(grid.n)])
         ubar, u1 = v[:grid.n], v[grid.n:]
-        mem = sum(-M[j, self.regime] * (As[j] @ ubar) for j in range(len(As)))
+        # the memory of the starting regime, less the initial layer e^{QT} M that cancels it at T = 0
+        from scipy.linalg import expm
+        layer = expm(np.asarray(m.chain.generator) * T) @ M.T               # column j: e^{QT} M_j
+        mem = sum(-(M[j, self.regime] - layer[self.regime, j]) * (As[j] @ ubar) for j in range(len(As)))
         self.averaged, self.correction, self.memory = grid.interp(ubar, x0), grid.interp(u1, x0), grid.interp(mem, x0)
         scale = max(abs(self.averaged), 1e-300)
         self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=abs(self.correction) / scale,

@@ -77,7 +77,9 @@ class SwitchingEquityRates(SwitchingModel):
         f = [sS ** 2, b, sR ** 2, self.rho * sS * sR]; fbar = [float(pi @ v) for v in f]
         nx, nr = (n, n) if np.isscalar(n) else n
         if width is None:
-            Lx = 8 * math.sqrt(max(sS ** 2) * T) + 2 * T * (abs(b).max() + abs(E.q))
+            # log S_T carries the integrated short rate as well as the equity's own diffusion
+            Lx = (8 * (math.sqrt(max(sS ** 2) * T) + math.sqrt(max(sR ** 2) * _m.int_B2(R.a, T)))
+                  + 2 * T * (max(abs(b).max(), abs(R.r0)) + abs(E.q)))
             Lr = 6 * math.sqrt(max(sR ** 2) * (1 - math.exp(-2 * R.a * T)) / (2 * R.a)) + abs(b - R.r0).max()
         else:
             Lx, Lr = (width, width) if np.isscalar(width) else width
