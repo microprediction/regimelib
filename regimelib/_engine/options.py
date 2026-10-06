@@ -105,15 +105,16 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     pi = pi / pi.sum()
     var = float(pi @ np.asarray(sigmas) ** 2) * ou_variance(kappa, T)
     refuse_hidden_variance(var, sigmas, "an option on a bond")
+    chosen = U is None
     if U is None:
         U = 8 / math.sqrt(var)
     b = stable_B(kappa, S - T)
     ET = math.exp(-kappa * T)
     mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)
 
-    def a_vec(t, c, a0, numerical=True):
+    def a_vec(t, c, a0, numerical=True, direct=False):
         g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c, t)
-        a = None if order is None else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        a = None if order is None or direct else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
         if a is None and numerical:
             a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         return a, Bc.value(t)
@@ -131,6 +132,19 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     cases = [case for case in cases if sure[case[0]] is None]
     if not cases:
         return price
+    def beyond(U):                                                   # the largest of the transforms at the cutoff
+        return max(abs(a_vec(T, c0 - 1j * U, np.eye(m)[j], direct=True)[0][start] * cmath.exp(-((c0 - 1j * U) * ET + stable_B(kappa, T)) * x0))
+                   for j, c0, _ in cases)
+    if chosen:
+        # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
+        # transform decays more slowly, so follow the transforms themselves
+        widest = 16 * U
+        while U < widest and beyond(U) > 1e-9:
+            U *= 2
+        if beyond(U) > 1e-9:
+            raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
+                                  "the stationary variance gives: the chain is slow against the expiry and this regime "
+                                  "is far quieter than the others. Use SwitchingFDEngine for this option.")
     rate = max(abs(xs - mean_xT) for xs, known in zip(xstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
     blownUp = False

@@ -26,6 +26,12 @@ refused, and a payoff in a regime the stationary law gives less than a millionth
 order zero is the maturity derivative of the order-zero price; above it, it is computed with one more term in the
 state, since the reduced equation applied to a truncation loses an order.
 
+The transform engines are accurate in absolute terms, to about ``1e-10`` of the notional. A value far out of the
+money that is smaller than that is the error of an integral, so it is kept within its bounds (never negative, never
+below the discounted forward intrinsic value) and is not accurate in relative terms. The Fourier range is sized from
+the transform being inverted, from the starting regime; for an option on a bond from a regime far quieter than the
+others, on a chain too slow to leave it before expiry, that range is refused and ``SwitchingFDEngine`` prices it.
+
 .. code-block:: python
 
     engine = rl.FastSwitchingEngine(model, order=None, regime=0)

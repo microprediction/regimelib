@@ -217,6 +217,7 @@ class SwitchingFDEngine:
         vVan = self._march(Big, np.tile(u0, nR), T)
         van = self._greeks(grid, vVan, x0, Big, nR)
         out = {k: van[k] - res[k] for k in van}
+        out["value"] = max(out["value"], 0.0)                            # the difference of two grids, far from the barrier
         if opt.rebate:                                                   # the discounted probability of never hitting
             vS = self._march(BigB, np.ones(nR * gridB.n), T, fixed=(idx, 0.0))
             never = self._greeks(gridB, vS, x0, BigB, nR)

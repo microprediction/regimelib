@@ -416,9 +416,8 @@ class SwitchingEngine:
         k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(forward / K)))
         I0 = sum(w * (cmath.exp(-1j * u * k) * psi(u - 0.5j)).real / (u * u + 0.25) for u, w in zip(us, ws))
         call = m.S0 * math.exp(-m.q * T) - math.sqrt(K) / math.pi * I0
-        if opt.isCall:
-            return {"value": call}
-        return {"value": call - m.S0 * math.exp(-m.q * T) + K * bond}
+        floor = m.S0 * math.exp(-m.q * T) - K * bond
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _geometricAsian(self, opt):
         """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
@@ -433,7 +432,14 @@ class SwitchingEngine:
         if K <= 0:                                                       # the average is positive: a forward, or nothing
             return {"value": math.exp(-m.r * T) * (FG - K) if opt.isCall else 0.0}
         k = math.log(FG / K); lf = math.log(FG / m.S0)
-        U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
+        # the average is narrower than the terminal value, so its transform decays more slowly: size the range from it
+        def size(u):
+            g, gfuncs = m.averageForcing(u - 0.5j, T)
+            return abs(_numericalAVector(m.chain.generator, g, gfuncs, T, 1e-10)[self.regime] * cmath.exp(-1j * (u - 0.5j) * lf))
+        U = self._frequencyLimit(T, k)
+        while U < 1e4 and size(U) > 1e-12:
+            U *= 2
+        us, ws = _gauss(U, self._nodeCount(U, k))
         I0 = 0.0
         for u, w in zip(us, ws):
             z = u - 0.5j
@@ -441,7 +447,8 @@ class SwitchingEngine:
             I0 += w * e.real / (u * u + 0.25)
         disc = math.exp(-m.r * T)
         call = disc * (FG - math.sqrt(FG * K) / math.pi * I0)
-        return {"value": call if opt.isCall else call - disc * (FG - K)}
+        floor = disc * (FG - K)
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _order(self):
         return None
@@ -487,6 +494,8 @@ class SwitchingEngine:
             out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
             out["theta"] = -(dC_dT - (-m.r * disc * (F - K) + disc * mu * F))
             out["rho"] = rho - T * K * disc
+        # the absolute error of the integral is all that is left of a value far out of the money
+        out["value"] = max(out["value"], disc * (F - K) * (1.0 if opt.isCall else -1.0), 0.0)
         return out
 
     def _aVector(self, g, gfuncs, T, a0=None):
@@ -505,7 +514,7 @@ class SwitchingEngine:
             g, gfuncs, pre = m.returnForcing(u + shift, T)
             phi = pre() * self._a(g, gfuncs, T)
             I += w * (cmath.exp(-1j * u * k) * phi / (1j * u)).real
-        prob = 0.5 + I / math.pi                              # P(S_T > K) under the relevant measure
+        prob = min(max(0.5 + I / math.pi, 0.0), 1.0)          # P(S_T > K) under the relevant measure
         if opt.payoffType == "cash":
             value = disc * opt.cash * (prob if opt.isCall else 1 - prob)
         else:
@@ -542,6 +551,14 @@ class SwitchingEngine:
             return abs(pre() * cmath.exp(gbar.integral(T)))          # no 1/(u^2 + 1/4): the gamma integrand has none
         U = 8.0
         while size(U) > 1e-14 and U < 1e4:
+            U *= 2
+        # the averaged model bounds a chain that mixes within the maturity. From a regime of low volatility that the
+        # chain may not leave, the transform decays more slowly than the average: follow the one being inverted
+        Q = m.chain.generator
+        def actual(u):
+            g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
+            return abs(pre() * _numericalAVector(Q, g, gfuncs, T, 1e-10)[self.regime])
+        while m.n > 1 and U < 1e4 and actual(U) > 1e-12:
             U *= 2
         return U
 

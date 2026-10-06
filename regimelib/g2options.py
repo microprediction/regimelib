@@ -54,12 +54,13 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     Vy = float(pi @ eta ** 2) * ou_variance(b, T)
     Cxy = float(pi @ (rho * sig * eta)) * ou_variance((a + b) / 2, T)
     var = Ba * Ba * Vx + Bb * Bb * Vy + 2 * Ba * Bb * Cxy
+    chosen = U is None
     if U is None and var > 0:
         U = 8 / math.sqrt(var)
 
-    def a_vec(t, c, a0, numerical=True):
+    def a_vec(t, c, a0, numerical=True, direct=False):
         g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb, t)
-        out = None if order is None else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        out = None if order is None or direct else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
         if out is None and numerical:
             out = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
         return out
@@ -86,6 +87,17 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     cases = [case for case in cases if sure[case[0]] is None]
     if not cases:
         return float(price)
+    if chosen:
+        # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
+        # transform decays more slowly, so follow the transforms themselves
+        beyond = lambda U: max(abs(np.asarray(a_vec(T, c0 - 1j * U, np.eye(m)[j], direct=True))[start]) for j, c0, _ in cases)
+        widest = 16 * U
+        while U < widest and beyond(U) > 1e-9:
+            U *= 2
+        if beyond(U) > 1e-9:
+            raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
+                                  "the stationary variance gives: the chain is slow against the expiry and this regime "
+                                  "is far quieter than the others. Use SwitchingFDEngine for this option.")
     rate = max(abs(zs) for zs, known in zip(zstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
     blownUp = False
