@@ -8,7 +8,7 @@ import math
 import cmath
 import numpy as np
 from ._engine.options import _kronrod_nodes
-from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable
+from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable, _finished
 from ._engine.models import loadings, stable_B, ou_variance, refuse_hidden_variance
 
 
@@ -38,7 +38,7 @@ def _g2_terminal_vectors(t, Q, a, b, sigmas, etas, rhos, cxs, cys, A0, rtol=1e-1
         d = g * A + Q @ A
         return np.concatenate([d.real.ravel(), d.imag.ravel()])
     y0 = np.asarray(A0, complex)
-    y = solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method="DOP853", rtol=rtol, atol=1e-14).y[:, -1]
+    y = _finished(solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method="DOP853", rtol=rtol, atol=1e-14), t)
     return (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
 
 

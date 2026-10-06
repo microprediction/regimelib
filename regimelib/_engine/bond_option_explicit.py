@@ -19,6 +19,7 @@ import numpy as np
 from math import comb
 from scipy.stats import norm
 from .explicit import vasicek_moment
+from .models import stable_B
 
 
 def Phi_n(n, T, kappa):
@@ -59,7 +60,7 @@ def pieces(kappa, th, sig, x0, T, S, lam):
     sb, st = np.mean(s2), (s2[0] - s2[1]) / 2
     eps = 1 / lam
     E = math.exp(-kappa * T)
-    B = (1 - E) / kappa
+    B = stable_B(kappa, T)
     I1, I2 = M(0, 1, T, kappa), M(0, 2, T, kappa)
     EB = M(1, 1, T, kappa)
     alpha = -B * x0 - kappa * thb * I1 + 0.5 * sb * I2          # log of the averaged P(0, T)
@@ -74,7 +75,7 @@ def pieces(kappa, th, sig, x0, T, S, lam):
     gt0 = [0.0, -kappa * tht, 0.5 * st]                          # Bc(0) = c
     # bond factors at expiry, tau = S - T, c = 0
     tau = S - T
-    b = (1 - math.exp(-kappa * tau)) / kappa
+    b = stable_B(kappa, tau)
     Itau = {k: M(0, k, tau, kappa) for k in (1, 2, 3, 4)}
     gbar_int = -kappa * thb * Itau[1] + 0.5 * sb * Itau[2]
     gt2_int = (kappa * tht) ** 2 * Itau[2] - kappa * tht * st * Itau[3] + st * st / 4 * Itau[4]

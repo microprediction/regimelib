@@ -17,13 +17,14 @@ from .information import startingBelief, checkInformation, regimeIsKnown, byBeli
 class SwitchingFDEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None, information="inferred"):
+    def __init__(self, model, regime=0, n=None, steps=400, width=None, stretch=None, information="inferred"):
         """`stretch` concentrates the nodes of a two-dimensional grid around the strike and the starting factor
         (the width of the dense region as a fraction of the interval, 0.1 to 0.3 is usual); None is uniform."""
         import numbers
         if isinstance(steps, bool) or not isinstance(steps, numbers.Integral) or steps < 1:
             raise ValueError(f"steps must be a positive integer number of time steps, got {steps!r}")
-        self.model, self.n, self.steps, self.width, self.stretch = model, n, int(steps), width, stretch
+        from .firstorder import _gridSize
+        self.model, self.n, self.steps, self.width, self.stretch = model, _gridSize(model, n, 1001), int(steps), width, stretch
         self.regime, self.belief = startingBelief(regime, model.n)      # a regime index, or a belief over the regimes
         self.information = checkInformation(information)
 
@@ -40,9 +41,11 @@ class SwitchingFDEngine:
                 blocks[i][k] = Li + Q[i, i] * I if i == k else Q[i, k] * I
         return sp.bmat(blocks, format="csr"), grid, u0, x0, nR
 
-    def _march(self, Big, u, T, project=None, fixed=None):
-        """Rannacher start then Crank-Nicolson; `project` is applied after each step, `fixed` is (indices, value)."""
+    def _march(self, Big, u, T, project=None, fixed=None, window=None):
+        """Rannacher start then Crank-Nicolson; `project` is applied after each step, `fixed` is (indices, value).
+        `window` is the longest time to maturity at which exercise is allowed (all of them when None)."""
         N = Big.shape[0]; I = sp.identity(N, format="csr"); dt = T / self.steps
+        allowed = lambda tau: project is not None and (window is None or tau <= window + 1e-12)
         if fixed is not None:
             idx, val = fixed
             keep = np.ones(N); keep[idx] = 0.0
@@ -53,14 +56,14 @@ class SwitchingFDEngine:
         for k in range(self.steps):
             if k < 2:                                                    # two implicit Euler half steps, each projected
                 u = half.solve(u)
-                if project is not None:
+                if allowed((k + 0.5) * dt):
                     u = np.maximum(u, project)
                 if fixed is not None:
                     u[idx] = val
                 u = half.solve(u)
             else:
                 u = full_l.solve(full_r @ u)
-            if project is not None:
+            if allowed((k + 1) * dt):
                 u = np.maximum(u, project)
             if fixed is not None:
                 u[idx] = val
@@ -70,20 +73,20 @@ class SwitchingFDEngine:
         """Spot greeks from the regime block; the grid is in log price for Black-Scholes, in price for CEV. On a
         two-dimensional grid (log S, r) the derivatives are taken along log S at the starting rate."""
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
+        S0 = self.model.S0
         if hasattr(grid, "gx"):                                          # Grid2D: (log S, second factor)
             u2 = v[blk].reshape(len(grid.x), len(grid.v)); j = int(np.argmin(abs(grid.v - x0[1])))
-            u, h = u2[:, j], grid.gx.h; i = int(np.argmin(abs(grid.x - x0[0]))); S0 = self.model.S0
-            ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
-            theta = -(Big @ v)[blk].reshape(len(grid.x), len(grid.v))[i, j]
+            ux, uxx = _localDerivatives(grid.x, u2[:, j], x0[0])
+            theta = -grid.interp((Big @ v)[blk], x0)
             return {"value": grid.interp(v[blk], x0), "delta": ux / S0, "gamma": (uxx - ux) / (S0 * S0), "theta": theta}
-        u = v[blk]; h = grid.h; i = int(np.argmin(abs(grid.x - x0)))
-        ux = (u[i + 1] - u[i - 1]) / (2 * h); uxx = (u[i + 1] - 2 * u[i] + u[i - 1]) / (h * h)
-        S0 = self.model.S0; logGrid = abs(math.exp(grid.x[i]) - S0) < abs(grid.x[i] - S0)
+        u = v[blk]
+        ux, uxx = _localDerivatives(grid.x, u, x0)
+        logGrid = abs(x0 - math.log(S0)) < abs(x0 - S0)                  # the state is log S or S
         if logGrid:
             delta, gamma = ux / S0, (uxx - ux) / (S0 * S0)
         else:
             delta, gamma = ux, uxx
-        theta = -(Big @ v)[blk][i]                                       # dV/dt = -L V in calendar time
+        theta = -grid.interp((Big @ v)[blk], x0)                         # dV/dt = -L V in calendar time
         return {"value": grid.interp(u, x0), "delta": delta, "gamma": gamma, "theta": theta}
 
     def calculate(self, instrument, results=False):
@@ -108,7 +111,7 @@ class SwitchingFDEngine:
         those directly. A G2 model with one factor's volatility identically zero is the one-factor Hull-White model
         in the other factor, and is solved as such."""
         from .engines import NumericalSwitchingEngine, _noDiffusion, deterministicEquity
-        from .models import SwitchingG2, SwitchingHullWhite
+        from .models import SwitchingG2, SwitchingHullWhite, SwitchingBlackScholesProcess
         from .hybrid import SwitchingEquityRates
         from .instruments import ZeroCouponBond
         m = self.model
@@ -116,6 +119,18 @@ class SwitchingFDEngine:
         if rate and _noDiffusion(m) == "switching level":
             from .engines import _atoms
             raise _atoms("an option on a bond or a swap")
+        if isinstance(m, SwitchingEquityRates) and isinstance(instrument, VanillaOption):
+            R = m.rates
+            if np.all(np.asarray(R.sigma, float) == 0.0):               # the rate has no noise: is its path constant?
+                level = set(getattr(R, "b", [None]))
+                constant = hasattr(R, "r0") and hasattr(R, "b") and (R.a == 0.0 or level == {R.r0})
+                if not constant or not isinstance(m.equity, SwitchingBlackScholesProcess):
+                    raise NotImplementedError("the equity-with-rates grid needs a rate that diffuses; with a "
+                                              "deterministic rate that is not constant this case is not priced")
+                flat = SwitchingBlackScholesProcess(m.chain, m.S0, R.r0, m.q, m.equity.sigma)
+                n = self.n[0] if isinstance(self.n, tuple) else self.n
+                engine = SwitchingFDEngine(flat, regime=start, n=n, steps=self.steps, information=self.information)
+                return engine.calculate(instrument, results=True)       # Black-Scholes at the constant rate
         if _noDiffusion(m) == "deterministic":
             if rate:
                 reduced = NumericalSwitchingEngine(m, regime=start, information="observed")
@@ -161,8 +176,14 @@ class SwitchingFDEngine:
             out = self._barrier(instrument)
         else:
             Big, grid, u0, x0, nR = self._system(instrument, self.width)
-            v = self._march(Big, np.tile(u0, nR), instrument.maturity, project=np.tile(u0, nR) if instrument.isAmerican else None)
+            T = instrument.maturity
+            v = self._march(Big, np.tile(u0, nR), T, project=np.tile(u0, nR) if instrument.isAmerican else None,
+                            window=T - getattr(instrument, "earliestExercise", 0.0))
             out = self._greeks(grid, v, x0, Big, nR)
+            if instrument.isAmerican and getattr(instrument, "earliestExercise", 0.0) <= 0.0:
+                held = float(instrument.payoffOnGrid([self.model.S0])[0])
+                if held > 0 and out["value"] <= held * (1 + 1e-9):       # exercised now: the value is the payoff,
+                    out["theta"] = 0.0                                   # which does not change with the date
         return out if results else out["value"]
 
     def _barrier(self, opt):
@@ -215,12 +236,14 @@ class SwitchingFDEngine:
         steps = self.steps
         u = exerciseValue(T_end).ravel()
         t_hi = T_end
-        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
+        for t_lo in reversed(exercises[:-1]):                            # each earlier exercise date, time zero included
             self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
             u = self._march(Big, u, t_hi - t_lo)
-            if t_lo > 0:
-                u = np.maximum(u, exerciseValue(t_lo).ravel())
+            u = np.maximum(u, exerciseValue(t_lo).ravel())
             t_hi = t_lo
+        if t_hi > 0:                                                     # and from the first exercise date to today
+            self.steps = max(4, int(round(steps * t_hi / T_end)))
+            u = self._march(Big, u, t_hi)
         self.steps = steps
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
         return {"value": m.deterministicDiscount(0.0, T_end) * grid.interp(u[blk], r0)}
@@ -274,16 +297,29 @@ class SwitchingFDEngine:
         steps = self.steps
         u = np.maximum(value(T_end), 0.0)
         t_hi = T_end
-        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
-            if t_hi > t_lo:
-                self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
-                u = self._march(L, u, t_hi - t_lo)
-            if t_lo > 0:
-                u = np.maximum(u, value(t_lo))
+        for t_lo in reversed(exercises[:-1]):
+            self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
+            u = self._march(L, u, t_hi - t_lo)
+            u = np.maximum(u, value(t_lo))
             t_hi = t_lo
+        if t_hi > 0:
+            self.steps = max(4, int(round(steps * t_hi / T_end)))
+            u = self._march(L, u, t_hi)
         self.steps = steps
         p0 = float(self.belief[0]) if self.belief is not None else (1.0 if self.regime == 0 else 0.0)
         return {"value": grid.interp(u, (r0, p0))}
+
+
+def _localDerivatives(x, u, x0):
+    """First and second derivative at x0 of the parabola through the three nodes around it. The three are interior to
+    the grid, so next to a barrier (an end of the grid) the stencil is one-sided, and unequal spacing is handled."""
+    i = int(np.clip(np.searchsorted(x, x0), 1, len(x) - 2))
+    if i > 1 and abs(x[i - 1] - x0) < abs(x[i] - x0):
+        i -= 1
+    (a, b, c), (fa, fb, fc) = x[i - 1:i + 2], u[i - 1:i + 2]
+    la, lb, lc = fa / ((a - b) * (a - c)), fb / ((b - a) * (b - c)), fc / ((c - a) * (c - b))
+    ux = la * (2 * x0 - b - c) + lb * (2 * x0 - a - c) + lc * (2 * x0 - a - b)
+    return float(ux), float(2 * (la + lb + lc))
 
 
 def _exerciseTerms(inst):

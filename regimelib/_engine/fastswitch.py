@@ -232,9 +232,8 @@ class FastSwitch:
         n = self.n = Q.shape[0]
         self.eps = eps = n / -np.trace(Q)
         Q0 = self.Q0 = eps * Q
-        w_, vl = np.linalg.eig(Q0.T)
-        pi = np.real(vl[:, np.argmin(abs(w_))])
-        self.pi = pi = pi / pi.sum()
+        from ..chain import RegimeChain
+        self.pi = pi = RegimeChain(Q0).stationaryDistribution()      # subtraction-free: nonnegative on stiff chains
         one = np.ones(n)
         self.Qs = Qs = np.linalg.inv(Q0 - np.outer(one, pi)) + np.outer(one, pi)  # group inverse
         self.g, self.N = g, order
@@ -438,6 +437,13 @@ class _ComplexForcing(Exception):
     pass
 
 
+def _finished(sol, t):
+    """The state at t from an ODE solve, or an error: a solver that stopped early has not produced a(t)."""
+    if not sol.success or abs(sol.t[-1] - t) > 1e-12 * max(1.0, abs(t)):
+        raise ArithmeticError(f"the reduced system could not be integrated to t = {t}: stopped at {sol.t[-1]} ({sol.message})")
+    return sol.y[:, -1]
+
+
 def numerical_a_callable(t, Q, gfuncs, rtol=1e-12, a0=None, is_complex=None):
     """a(t) for a' = (Q + diag g(t)) a with g given as callables (scipy DOP853, complex allowed).
     is_complex=None decides from the values: g is sampled on [0, t], and a real solve restarts in complex arithmetic
@@ -465,7 +471,7 @@ def numerical_a_callable(t, Q, gfuncs, rtol=1e-12, a0=None, is_complex=None):
             return gv * y + Q @ y
         a0c = a0.astype(complex)
         y0 = np.concatenate([a0c.real, a0c.imag]) if cplx else a0.real.astype(float)
-        y = solve_ivp(rhs, (0, t), y0, method='DOP853', rtol=rtol, atol=1e-14).y[:, -1]
+        y = _finished(solve_ivp(rhs, (0, t), y0, method='DOP853', rtol=rtol, atol=1e-14), t)
         return y[:n] + 1j * y[n:] if cplx else y
     if not is_complex:
         try:

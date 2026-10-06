@@ -17,6 +17,7 @@ from .models import SwitchingModel, SwitchingVasicek, SwitchingHullWhite, Switch
 
 
 class SwitchingEquityRates(SwitchingModel):
+    defaultGrid = (161, 61)                            # (log price, rate) nodes when an engine is given none
     """`rho` is the equity-rate Brownian correlation, allowed for a Black-Scholes equity (the exponent stays Gaussian
     given the regime path, and the cross term -c i w rho sigma_S sigma_r B(tau) joins the forcing); Heston needs rho = 0."""
     def __init__(self, equity, rates, rho=0.0):

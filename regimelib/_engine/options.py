@@ -3,7 +3,7 @@ calls on zero-coupon bonds under Vasicek with a switching mean level and volatil
 import math
 import cmath
 import numpy as np
-from .fastswitch import FastSwitch, numerical_a_callable
+from .fastswitch import FastSwitch, numerical_a_callable, _finished
 from .models import bs_switching, vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
 
 
@@ -73,8 +73,8 @@ def _terminal_vectors(t, Q, kappa, thetas, sigmas, cs, A0, rtol=1e-12):
         d = (-kappa * th * Bc + 0.5 * s2 * Bc * Bc) * A + Q @ A
         return np.concatenate([d.real.ravel(), d.imag.ravel()])
     y0 = np.asarray(A0, complex)
-    y = solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method='DOP853',
-                  rtol=rtol, atol=1e-14).y[:, -1]
+    y = _finished(solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method='DOP853',
+                  rtol=rtol, atol=1e-14), t)
     return (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
 
 
