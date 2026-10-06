@@ -7,7 +7,7 @@ D_x(tau) = c B_a e^{-a tau} + (1 - e^{-a tau}) / a and likewise D_y."""
 import math
 import cmath
 import numpy as np
-from ._engine.options import _kronrod_nodes
+from ._engine.options import _kronrod_nodes, settled
 from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable, _finished
 from ._engine.models import loadings, stable_B, ou_variance, refuse_hidden_variance
 
@@ -42,7 +42,7 @@ def _g2_terminal_vectors(t, Q, a, b, sigmas, etas, rhos, cxs, cys, A0, rtol=1e-1
     return (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
 
 
-def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None, tol=1e-10, panels=None):
+def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None, tol=1e-10, panels=None, solve=None):
     """Call expiring at T, strike K, on the unit bond maturing at S, in the zero-mean factor model (x0 = y0 = 0,
     no phi): the caller scales by the deterministic curve factors. order=None: numerical solution; else expansion."""
     Q = np.asarray(Q, float); m = len(sigmas)
@@ -57,11 +57,12 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     if U is None and var > 0:
         U = 8 / math.sqrt(var)
 
-    def a_vec(t, c, a0):
+    def a_vec(t, c, a0, numerical=True):
         g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb, t)
-        if order is None:
-            return numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
-        return FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        out = None if order is None else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        if out is None and numerical:
+            out = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
+        return out
     A = np.asarray(a_vec(tau, 0.0, np.ones(m))).real                    # bond factors at expiry per regime
     if var < -1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy):
         raise ValueError("the factor covariance is not positive semidefinite")
@@ -76,21 +77,37 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
         return float(sum(max(A[j] - K, 0.0) * np.asarray(a_vec(T, 0.0, np.eye(m)[j]))[start].real for j in range(m)))
     zstar = [math.log(A[j] / K) for j in range(m)]
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((1.0, A[j]), (0.0, -K))]
+    # z = B_a x_T + B_b y_T has mean zero and, given the path of the chain, at most this variance
+    vmax = (abs(Ba) * np.max(np.abs(sig)) * math.sqrt(ou_variance(a, T)) + abs(Bb) * np.max(np.abs(eta)) * math.sqrt(ou_variance(b, T))) ** 2
+    sure = settled(zstar, 0.0, 0.0, vmax, 1.0)
     price = 0.0
     for j, c0, weight in cases:
-        price += weight * 0.5 * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real
-    rate = max(abs(zs) for zs in zstar) + math.sqrt(var)
+        price += weight * (0.5 if sure[j] is None else sure[j]) * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real
+    cases = [case for case in cases if sure[case[0]] is None]
+    if not cases:
+        return float(price)
+    rate = max(abs(zs) for zs, known in zip(zstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan); nu = len(us)
-        if order is None:
+        avals = None
+        if order is not None and not blownUp:
+            avals = np.empty((len(cases), nu), complex)
+            for k, (j, c0, _) in enumerate(cases):
+                for n, u in enumerate(us):
+                    value = a_vec(T, c0 - 1j * u, np.eye(m)[j], numerical=False)
+                    if value is None:
+                        blownUp = True; break                           # one method for every node: see _solver
+                    avals[k, n] = np.asarray(value)[start]
+                if blownUp:
+                    avals = None; break
+        if avals is None:
             cs = np.concatenate([c0 - 1j * us for _, c0, _ in cases])
             A0 = np.zeros((m, len(cases) * nu), complex)
             for k, (j, _, _) in enumerate(cases):
                 A0[j, k * nu:(k + 1) * nu] = 1.0
             avals = _g2_terminal_vectors(T, Q, a, b, sig, eta, rho, cs * Ba, cs * Bb, A0)[start].reshape(len(cases), nu)
-        else:
-            avals = np.array([[np.asarray(a_vec(T, c0 - 1j * u, np.eye(m)[j]))[start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for k, (j, c0, weight) in enumerate(cases):
             f = (np.exp(-1j * us * zstar[j]) * avals[k]).imag / us

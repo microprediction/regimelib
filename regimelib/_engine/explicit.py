@@ -45,44 +45,6 @@ def vasicek_moment(k, m, T, kappa):
     return float(np.sum(wt * np.exp(-k * kappa * t) * (-np.expm1(-kappa * t) / kappa) ** m))
 
 
-def I_k(k, t, kappa):
-    """int_0^t B^k = kappa^{-k} (t + sum_j C(k, j) (-1)^j (1 - e^{-j kappa t}) / (j kappa))."""
-    return vasicek_moment(0, k, t, kappa)
-
-
-def J_1(t, kappa, m):
-    """int_0^t 1/(1 + m B)."""
-    c, q = 1 + m / kappa, m / kappa
-    return t / c + math.log((c - q * math.exp(-kappa * t)) / (c - q)) / (c * kappa)
-
-
-def J_2(t, kappa, m):
-    """int_0^t 1/(1 + m B)^2."""
-    c, q = 1 + m / kappa, m / kappa
-    return J_1(t, kappa, m) / c - (1 / (c - q * math.exp(-kappa * t)) - 1 / (c - q)) / (c * kappa)
-
-
-def vasicek_jump_integrals(t, kappa, a, b, c, m):
-    """int_0^t f^2 for f = a B + b B^2 + c (r - 1), r = 1/(1 + m B)  (c = 0 or m = 0: no jump part)."""
-    I1, I2, I3, I4 = (I_k(k, t, kappa) for k in (1, 2, 3, 4))
-    out = a * a * I2 + 2 * a * b * I3 + b * b * I4
-    if c:
-        J1, J2 = J_1(t, kappa, m), J_2(t, kappa, m)
-        int_B_rm1 = (t - J1) / m - I1                       # int B (r - 1)
-        int_B2_rm1 = (I1 - (t - J1) / m) / m - I2           # int B^2 (r - 1)
-        int_rm1_sq = J2 - 2 * J1 + t                        # int (r - 1)^2
-        out += c * c * int_rm1_sq + 2 * a * c * int_B_rm1 + 2 * b * c * int_B2_rm1
-    return out
-
-
-def vasicek_jump_mean(t, kappa, a, b, c, m):
-    """int_0^t (a B + b B^2 + c (r - 1))."""
-    out = a * I_k(1, t, kappa) + b * I_k(2, t, kappa)
-    if c:
-        out += c * (J_1(t, kappa, m) - t)
-    return out
-
-
 # ---------------------------------------------------------------- CIR B = 2(e^{ht}-1) / ((h+kappa)(e^{ht}-1) + 2h)
 def cir_B(t, kappa, sigma):
     """B = 2(1-q) / ((h+kappa)(1-q) + 2h q), q = e^{-ht}: the form above divided by e^{ht}."""

@@ -13,6 +13,31 @@ import sympy as sp
 r0, kappa, th1, th2, s1, s2, lam, T = sp.symbols("r_0 kappa theta_1 theta_2 sigma_1 sigma_2 lambda T", positive=True)
 t = sp.symbols("t", positive=True)
 
+DIGITS = 50          # the working precision of evaluate()
+SMALL = 1e-4         # the smallest kappa T, sigma T or m T at which a formula is evaluated
+
+
+def _evaluate(self, expr, values, small=()):
+    """The antiderivatives divide by powers of kappa (and of sigma, or of the jump mean), and their terms cancel: the
+    formula is right and double precision loses it long before the parameter is small. So a formula is evaluated at
+    DIGITS digits, and refused where the parameter is so small that the cancellation outruns those; the limit is a
+    different formula (no reversion, no diffusion, no jumps), and the engines price it."""
+    import mpmath
+    for name in small:
+        if not abs(values[name]) * values["T"] >= SMALL:
+            raise ValueError(f"{type(self).__name__} is not evaluated at {name} T = {abs(values[name]) * values['T']:.3g} "
+                             f"(below {SMALL:g}): the formula divides by powers of {name} and its terms cancel. "
+                             "Price with FastSwitchingEngine(model, order=1), which takes the limit.")
+    key = sp.srepr(expr)
+    if key not in self._fn:
+        self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "mpmath")
+    with mpmath.workdps(DIGITS):
+        v = self._fn[key](*[mpmath.mpc(values[n]) for n in self.symbols])
+        # logarithms of the antiderivatives can have negative arguments between the limits; their imaginary parts cancel
+        if not abs(mpmath.im(v)) < 1e-9 * max(1.0, abs(mpmath.re(v))):
+            raise ArithmeticError("imaginary parts did not cancel")
+        return float(mpmath.re(v))
+
 
 class VasicekTwoStateBond:
     """Symbolic bond price under a two-state switching Vasicek model, second order in 1/lambda."""
@@ -62,10 +87,7 @@ class VasicekTwoStateBond:
         return out
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("kappa",))
 
     # QuantLib-named conveniences, as formulas
     def delta(self): return self.greek("r0")
@@ -166,10 +188,7 @@ class VasicekBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("kappa",))
 
 
 # ---------------------------------------------------------------- two states, constant forcing: exact, all orders
@@ -271,10 +290,7 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("sigma",))
 
 
 # ---------------------------------------------------------------- Vasicek with jumps at a switching intensity, first order
@@ -346,12 +362,4 @@ class VasicekJumpsBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        """The antiderivatives carry logarithms whose arguments can be negative between the limits; their imaginary
-        parts cancel, so the expression is evaluated in complex arithmetic and the real part returned."""
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "mpmath")
-        import mpmath
-        v = self._fn[key](*[mpmath.mpc(values[n]) for n in self.symbols])
-        assert abs(mpmath.im(v)) < 1e-9 * max(1.0, abs(mpmath.re(v))), "imaginary parts did not cancel"
-        return float(mpmath.re(v))
+        return _evaluate(self, expr, values, small=("kappa", "m"))

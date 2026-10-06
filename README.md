@@ -81,7 +81,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
-with the initial layer; `order=None` adds terms until successive orders agree to `tol` or the series stops improving
+with the initial layer; `order=None` adds terms until two successive increments are within `tol` or the series stops improving
 (`orderUsed` and `lastIncrement` are set after `NPV()`). The engine raises an `ExpansionWarning` when the last term is
 not smaller than the one before it or when it is more than a thousandth of the value. The series is asymptotic in the
 holding time times the forcing, so at Fourier nodes of high frequency it diverges; there the engine solves the reduced

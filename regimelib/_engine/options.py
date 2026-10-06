@@ -58,6 +58,16 @@ def _kronrod_nodes(U, panels):
     return (mid + h * x).ravel(), (h * wk).ravel(), (h * wg).ravel()
 
 
+def settled(boundaries, lo, hi, vmax, tilt, deviations=15.0):
+    """Exercise is below a boundary x*_j in the state, which given the path of the chain is Gaussian with mean in
+    [lo, hi] and variance at most vmax, under the pricing measure and (mean lowered by at most tilt vmax) under the
+    measures of the bonds delivered. A boundary more than `deviations` standard deviations above every such mean is
+    exercise with certainty (1.0), one that far below is none (0.0), to 1e-49; otherwise None, and it is integrated.
+    Without this a bond maturing just after expiry, whose boundary recedes as 1 / (S - T), asks for as many panels."""
+    reach = deviations * math.sqrt(vmax)
+    return [1.0 if x > hi + reach else 0.0 if x < lo - tilt * vmax - reach else None for x in boundaries]
+
+
 def _terminal_vectors(t, Q, kappa, thetas, sigmas, cs, A0, rtol=1e-12):
     """a(t) for a' = (Q + diag g_c(t)) a, a(0) = A0[:, k], for every c = cs[k] at once (one DOP853 solve), with
     g_c the Vasicek terminal forcing of models.vasicek_terminal. Returns the m x len(cs) array of a(t)."""
@@ -78,7 +88,7 @@ def _terminal_vectors(t, Q, kappa, thetas, sigmas, cs, A0, rtol=1e-12):
     return (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
 
 
-def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, tol=1e-10, panels=None):
+def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, tol=1e-10, panels=None, solve=None):
     """Call expiring at T on the zero-coupon bond maturing at S. The bond at T in regime j is A_j exp(-b x_T).
     The Gil-Pelaez integrals stop at eight standard deviations of x_T, in frequency, under the averaged model.
 
@@ -86,7 +96,8 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     rate |x* - E x_T|, so the panels start at half a period wide, and they are halved until the embedded 7-point
     Gauss rule agrees with the Kronrod rule within tol (an absolute error on the price). A rule that does not
     converge raises rather than returning a value. order=None uses the numerical solution of the reduced system;
-    an integer uses the expansion through that order."""
+    an integer uses the expansion through that order, by `solve(g, gfuncs, t, a0)` if one is given (the engine's,
+    which solves numerically where the series diverges and keeps the diagnostics)."""
     Q = np.asarray(Q, float)
     m = len(thetas)
     wv, vl = np.linalg.eig(Q.T)
@@ -100,34 +111,49 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     ET = math.exp(-kappa * T)
     mean_xT = x0 * ET + float(pi @ np.asarray(thetas)) * (1 - ET)
 
-    def a_vec(t, c, a0):
+    def a_vec(t, c, a0, numerical=True):
         g, gf, Bc = vasicek_terminal(kappa, thetas, sigmas, c, t)
-        if order is None:
+        a = None if order is None else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        if a is None and numerical:
             a = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
-        else:
-            a = FastSwitch(Q, g, order=order, a0=a0).a(t, order)
         return a, Bc.value(t)
     A = a_vec(S - T, 0.0, np.ones(m))[0].real       # regime bond factors at expiry
     # the four integrands: regime j at expiry, and the two terms A_j e^{-b x} 1{x < x*} and K 1{x < x*}
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((b, A[j]), (0.0, -K))]
     xstar = [math.log(A[j] / K) / b for j in range(m)]
+    th = np.asarray(thetas, float)
+    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET),
+                   float(np.max(np.asarray(sigmas, float) ** 2)) * ou_variance(kappa, T), b)
     price = 0.0
     for j, c0, weight in cases:
         a, Bv = a_vec(T, c0, np.eye(m)[j])
-        price += weight * 0.5 * (a[start] * cmath.exp(-Bv * x0)).real
-    rate = max(abs(xs - mean_xT) for xs in xstar) + math.sqrt(var)
+        price += weight * (0.5 if sure[j] is None else sure[j]) * (a[start] * cmath.exp(-Bv * x0)).real
+    cases = [case for case in cases if sure[case[0]] is None]
+    if not cases:
+        return price
+    rate = max(abs(xs - mean_xT) for xs, known in zip(xstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan)
         nu = len(us)
-        if order is None:
+        avals = None
+        if order is not None and not blownUp:
+            avals = np.empty((len(cases), nu), complex)
+            for k, (j, c0, _) in enumerate(cases):
+                for n, u in enumerate(us):
+                    value = a_vec(T, c0 - 1j * u, np.eye(m)[j], numerical=False)[0]
+                    if value is None:
+                        blownUp = True; break                           # one method for every node: see _solver
+                    avals[k, n] = np.asarray(value)[start]
+                if blownUp:
+                    avals = None; break
+        if avals is None:
             cs = np.concatenate([c0 - 1j * us for _, c0, _ in cases])
             A0 = np.zeros((m, len(cases) * nu), complex)
             for k, (j, _, _) in enumerate(cases):
                 A0[j, k * nu:(k + 1) * nu] = 1.0
             avals = _terminal_vectors(T, Q, kappa, thetas, sigmas, cs, A0)[start].reshape(len(cases), nu)
-        else:
-            avals = np.array([[a_vec(T, c0 - 1j * u, np.eye(m)[j])[0][start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for k, (j, c0, weight) in enumerate(cases):
             Bv = (c0 - 1j * us) * ET + stable_B(kappa, T)
