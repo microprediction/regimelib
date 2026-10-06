@@ -26,6 +26,38 @@ The two-regime chain with switching rate ``rate12`` out of regime 0 and ``rate21
 
     chain = rl.RegimeChain.twoState(3.0, 5.0)
 
+Chains from data
+----------------
+
+regimelib prices; it does not estimate, and it takes no position on how a chain is fitted or under which measure.
+What an estimator produces is usually a transition matrix at the data frequency and a probability for each regime
+at the last observation. Two functions connect those to the library.
+
+.. function:: rl.RegimeChain.fromTransitionMatrix(P, dt)
+
+The chain whose transition matrix over a step ``dt`` is ``P`` (rows are the regime now). Not every transition
+matrix comes from a continuous-time chain: for two regimes it does exactly when ``p11 + p22 > 1``, and in general
+when its principal logarithm is a generator. A matrix that does not is refused, since how to move it to one that
+does is a modelling choice.
+
+.. function:: chain.transitionMatrix(dt)
+
+``exp(Q dt)``, the transition matrix of the chain over a step ``dt``.
+
+.. code-block:: python
+
+    P = [[0.98, 0.02], [0.08, 0.92]]                         # monthly, from any estimator
+    chain = rl.RegimeChain.fromTransitionMatrix(P, 1 / 12)
+    model = rl.SwitchingVasicek(chain, r0=0.03, a=0.5, b=[0.045, 0.015], sigma=[0.006, 0.018])
+    bond = rl.ZeroCouponBond(5.0)
+    bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=[0.3, 0.7]))    # the filtered probabilities
+    bond.NPV()
+
+The starting regime given as probabilities is the estimator's belief at the last observation
+(:doc:`../models/information`). A chain estimated from monthly or quarterly data typically switches slowly, where
+``NumericalSwitchingEngine`` is the engine to use; the expansion is for chains that switch fast against the life of
+the instrument.
+
 Per-regime parameters
 ---------------------
 

@@ -135,3 +135,28 @@ def test_smaller_refusals_and_additions():
         for engine in (rl.NumericalSwitchingEngine(heston), rl.FastSwitchingEngine(heston, order=1, regime=1)):
             exact = rl.VanillaOption(payoff, maturity=T); exact.setPricingEngine(engine)
             assert exact.vega() == 0.0                                           # a payoff or a forward: no dependence on v0
+
+
+def test_chain_from_and_to_a_transition_matrix():
+    """A utility for whoever estimates a chain at a data frequency; regimelib does not estimate."""
+    chain = rl.RegimeChain.twoState(0.25, 1.0)
+    P = chain.transitionMatrix(1 / 12)
+    assert P.sum(axis=1) == pytest.approx([1.0, 1.0]) and np.all(P >= 0)
+    back = rl.RegimeChain.fromTransitionMatrix(P, 1 / 12)
+    assert back.generator == pytest.approx(chain.generator, rel=1e-10)
+    three = rl.RegimeChain([[-5.0, 3.0, 2.0], [4.0, -9.0, 5.0], [1.0, 6.0, -7.0]])
+    back = rl.RegimeChain.fromTransitionMatrix(three.transitionMatrix(0.02), 0.02)
+    assert back.generator == pytest.approx(three.generator, rel=1e-8, abs=1e-8)
+    assert rl.RegimeChain.fromTransitionMatrix(np.eye(2), 1.0).generator == pytest.approx(np.zeros((2, 2)))
+    assert chain.transitionMatrix(0.0) == pytest.approx(np.eye(2))
+    for bad in ([[0.4, 0.6], [0.6, 0.4]], [[0.5, 0.5], [0.5, 0.5]], [[0.0, 1.0], [1.0, 0.0]]):     # p11 + p22 <= 1
+        with pytest.raises(ValueError, match="no continuous-time chain"):
+            rl.RegimeChain.fromTransitionMatrix(bad, 1.0)
+    cyclic = [[0.0, 1.0, 0.0], [0.0, 0.0, 1.0], [1.0, 0.0, 0.0]]                # a rotation: no generator
+    with pytest.raises(ValueError):
+        rl.RegimeChain.fromTransitionMatrix(cyclic, 1.0)
+    for bad in ([[0.9, 0.2], [0.1, 0.9]], [[1.1, -0.1], [0.1, 0.9]], [[0.9, 0.1]]):
+        with pytest.raises(ValueError):
+            rl.RegimeChain.fromTransitionMatrix(bad, 1.0)
+    with pytest.raises(ValueError, match="dt"):
+        rl.RegimeChain.fromTransitionMatrix(P, 0.0)

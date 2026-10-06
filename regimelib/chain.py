@@ -86,6 +86,50 @@ class RegimeChain:
         rate = -float(np.trace(self.generator))
         return math.inf if rate == 0.0 else self.numberOfRegimes() / rate      # a chain that never switches
 
+    def transitionMatrix(self, dt):
+        """P(dt) = exp(Q dt): the probabilities of each regime a time dt later, by row of the regime now."""
+        from scipy.linalg import expm
+        if not math.isfinite(dt) or dt < 0:
+            raise ValueError(f"dt must be finite and nonnegative, got {dt}")
+        return expm(self.generator * dt)
+
+    @staticmethod
+    def fromTransitionMatrix(P, dt):
+        """The chain whose transition matrix over a step dt is P, for a matrix estimated at a data frequency (rows
+        are the regime now and sum to one). Not every transition matrix comes from a continuous-time chain: for two
+        regimes it does exactly when p11 + p22 > 1, and in general when its principal logarithm is a generator. A
+        matrix that does not is refused; how to move it to one that does is a modelling choice left to the caller."""
+        from scipy.linalg import logm, expm
+        P = np.array(P, dtype=float)
+        if P.ndim != 2 or P.shape[0] != P.shape[1] or P.shape[0] == 0:
+            raise ValueError("the transition matrix must be square with at least one regime")
+        if not (math.isfinite(dt) and dt > 0):
+            raise ValueError(f"dt must be finite and positive, got {dt}")
+        if not np.all(np.isfinite(P)) or np.any(P < 0) or np.any(np.abs(P.sum(axis=1) - 1.0) > 1e-9):
+            raise ValueError("a transition matrix has nonnegative entries and rows that sum to one")
+        n = P.shape[0]
+        if n == 2:                                             # in closed form: exp(Q dt) has second eigenvalue 1 - p - q
+            p, q = P[0, 1], P[1, 0]
+            if p + q >= 1.0:
+                raise ValueError(f"no continuous-time chain has this transition matrix: it needs p11 + p22 > 1, and "
+                                 f"p11 + p22 = {P[0, 0] + P[1, 1]:.6g}")
+            rate = 0.0 if p + q == 0.0 else -math.log1p(-(p + q)) / dt / (p + q)
+            return RegimeChain.twoState(rate * p, rate * q)
+        with np.errstate(all="ignore"):
+            L = logm(P)
+        Q = np.real(L) / dt
+        off = Q - np.diag(np.diag(Q))
+        scale = max(np.abs(Q).max(), 1e-300)
+        if (not np.all(np.isfinite(L)) or np.abs(np.imag(L)).max() > 1e-9 * scale * dt
+                or off.min() < -1e-9 * scale):
+            raise ValueError("no continuous-time chain has this transition matrix: its principal logarithm is not a "
+                             "generator (an off-diagonal rate would be negative or complex)")
+        off = np.maximum(off, 0.0)
+        Q = off - np.diag(off.sum(axis=1))
+        if np.abs(expm(Q * dt) - P).max() > 1e-8:
+            raise ValueError("the logarithm of this transition matrix does not reproduce it as a generator")
+        return RegimeChain(Q)
+
     @staticmethod
     def twoState(rate12, rate21):
         return RegimeChain([[-rate12, rate12], [rate21, -rate21]])
