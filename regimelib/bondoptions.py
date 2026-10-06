@@ -106,7 +106,7 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
             Bv = (c0 - 1j * us) * ET + stable_B(kappa, T)
             f = (np.exp(-1j * us * xstar[j]) * avals[kk] * np.exp(-Bv * x0)).imag / us
             val += weight * (-(wk @ f) / math.pi); err += abs(weight) * abs((wk - wg) @ f) / math.pi
-        if err <= tol:
+        if err <= tol * max(1.0, abs(K)):                          # of the strike: the price scales with it
             return price + val
         npan *= 2
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} (error estimate {err:.1e})")

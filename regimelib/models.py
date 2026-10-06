@@ -499,7 +499,10 @@ class SwitchingIntensityBasket(SwitchingModel):
         def surv(model):
             return NumericalSwitchingEngine(model, regime=regime)._survival(t)
         q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
-        return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
+        if not (1e-10 < q1 < 1 - 1e-10 and 1e-10 < q2 < 1 - 1e-10):
+            raise ValueError(f"the survival probabilities to t = {t:g} are {q1:.3g} and {q2:.3g}: a default indicator "
+                             "that is all but certain has no variance to correlate, within what the solver resolves")
+        return min(1.0, max(-1.0, (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))))
 
 
 # ---------------------------------------------------------------- operator form for the first-order tier

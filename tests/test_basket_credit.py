@@ -1,4 +1,4 @@
-"""Two names on one regime chain: the joint survival is exact against Monte Carlo, independent names factorise in
+"""Two names on one regime chain: the joint survival against a discretised Monte Carlo, independent names factorise in
 the frozen limit (first-to-default against QuantLib's mid-point engine on the product survival curve), and the sign
 of the default correlation follows whether the names' intensities rise in the same regime."""
 import math
@@ -39,7 +39,8 @@ def test_common_regime_default_correlation_sign_and_monte_carlo():
     opposite = rl.SwitchingIntensityBasket([rl.SwitchingVasicek(chain, 0.02, 0.5, [0.01, 0.06], 0.003),
                                             rl.SwitchingVasicek(chain, 0.02, 0.5, [0.06, 0.01], 0.003)])
     assert same.defaultCorrelation(5.0) > 0.005 and opposite.defaultCorrelation(5.0) < -0.005     # slow chain, rare defaults
-    # joint survival against Monte Carlo with exact regime paths and exact Vasicek integrals per regime segment
+    # joint survival against Monte Carlo on a time grid (Euler in the intensities, one switch at most per step): the
+    # allowance of 2e-4 below is for that discretisation
     b = rl.ZeroCouponBond(5.0); b.setPricingEngine(rl.NumericalSwitchingEngine(same, regime=0)); ref = b.NPV()
     rng = np.random.default_rng(11); N, M = 200000, 1000; dt = 5.0 / M; Q = chain.generator
     l1 = np.full(N, 0.02); l2 = np.full(N, 0.02); I = np.zeros(N); reg = np.zeros(N, int); levels = np.array([0.01, 0.06])

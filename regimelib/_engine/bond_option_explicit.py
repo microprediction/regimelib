@@ -122,6 +122,11 @@ def R(k, A, K, b, mu, v):
 
 
 def call(kappa, th, sig, x0, T, S, K, lam, start=0, order=1):
+    if order and not T * lam >= 5.0:
+        # the outer expansion: its corrections carry powers of 1 / sd(x_T), and with no initial layer they grow as the
+        # expiry falls to the holding time
+        raise ValueError(f"the closed form is the outer expansion, for an expiry of at least five holding times "
+                         f"(T lam >= 5); here T lam = {T * lam:.3g}. Use the engines.")
     p = pieces(kappa, th, sig, x0, T, S, lam)
     eps = p['eps'] if order else 0.0
     sign = 1 if start == 0 else -1

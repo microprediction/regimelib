@@ -124,7 +124,7 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
         for k, (j, c0, weight) in enumerate(cases):
             f = (np.exp(-1j * us * zstar[j]) * avals[k]).imag / us
             val += weight * (-(wk @ f) / math.pi); err += abs(weight) * abs((wk - wg) @ f) / math.pi
-        if err <= tol:
+        if err <= tol * max(1.0, abs(K)):                          # of the strike: the price scales with it
             return price + val
         npan *= 2
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} (error estimate {err:.1e})")

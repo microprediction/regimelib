@@ -204,6 +204,10 @@ class SwitchingFDEngine:
         Big, grid, u0, _, nR = self._system(opt, self.width)
         L = (grid.x[-1] - grid.x[0]) / 2
         ends = (b, b + 2 * L) if not opt.isUp else (b - 2 * L, b)
+        if not ends[0] < x0 < ends[1]:
+            raise ValueError("the barrier is farther from the spot than the grid is wide, so the grid that ends at the "
+                             "barrier does not hold the spot. The barrier is then all but unreachable: price the vanilla "
+                             "(a knock-out) or nothing (a knock-in), or pass a larger width.")
         BigB, gridB, u0B, _, _ = self._system(opt, ends)
         bnode = 0 if not opt.isUp else gridB.n - 1
         idx = np.array([r * gridB.n + bnode for r in range(nR)])

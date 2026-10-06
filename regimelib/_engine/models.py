@@ -168,47 +168,6 @@ def heston_switching_theta(u, kappa, thetas, xi, rho, T):
     return g, gfuncs, D
 
 
-# ---------------------------------------------------------------- a fast mean-reverting factor (Hermite form)
-def fast_factor(kappa, theta0, theta1, sig0, sig1, rho, order):
-    """dx = kappa (theta0 + theta1 y - x) dt + (sig0 + sig1 y) dW, fast factor dY = -Y/eps dt + sqrt(2/eps) dZ,
-    corr(dW, dZ) = rho. With u = exp(-B x) a(t, y), B = (1 - exp(-kappa t)) / kappa, and delta = sqrt(eps):
-        a' = ( L / delta^2 + G_{-1}(t) / delta + G_0(t) ) a,
-        G_0 = g(t, y) = -kappa theta(y) B + sigma(y)^2 B^2 / 2,   G_{-1} = -sqrt(2) rho B sigma(y) d/dy,
-    in the probabilists' Hermite basis, truncated well above the modes the expansion reaches.
-    Returns (L, pi, one, Gs) for FastSwitchGen with q = 2."""
-    from fastswitch_op import Op, hermite_ops
-    M = 2 * order + 10
-    L, Y, pi, one = hermite_ops(M)
-    D = np.zeros((M, M))
-    for n in range(1, M):
-        D[n - 1, n] = float(n)
-    B = ExpSum({0: 1 / kappa, kappa: -1 / kappa})
-    BB = B * B
-    g0 = B.scale(-kappa * theta0) + BB.scale(0.5 * sig0 ** 2)
-    g1 = B.scale(-kappa * theta1) + BB.scale(sig0 * sig1)
-    g2 = BB.scale(0.5 * sig1 ** 2)
-    Gs = {0: Op([(g0, np.eye(M)), (g1, Y), (g2, Y @ Y)])}
-    if rho:
-        Gs[-1] = Op([(B.scale(-math.sqrt(2) * rho * sig0), D), (B.scale(-math.sqrt(2) * rho * sig1), Y @ D)])
-    return L, pi, one, Gs
-
-
-def fast_factor_exact(t, y, eps, kappa, theta0, theta1, sig0, sig1, rho):
-    """a(t, y) = exp(A + C1 y + C2 y^2) exactly, from three Riccati equations (scipy Radau)."""
-    from scipy.integrate import solve_ivp
-    se = math.sqrt(eps)
-
-    def f(r, z):
-        A, C1, C2 = z
-        b = (1 - math.exp(-kappa * r)) / kappa
-        c = -math.sqrt(2) * rho * b / se
-        return [(C1 * C1 + 2 * C2) / eps - kappa * theta0 * b + 0.5 * sig0 ** 2 * b * b + c * sig0 * C1,
-                (-C1 + 4 * C1 * C2) / eps - kappa * theta1 * b + sig0 * sig1 * b * b + c * (2 * sig0 * C2 + sig1 * C1),
-                (-2 * C2 + 4 * C2 * C2) / eps + 0.5 * sig1 ** 2 * b * b + 2 * c * sig1 * C2]
-    z = solve_ivp(f, (0, t), [0, 0, 0], method='Radau', rtol=3e-14, atol=1e-18).y[:, -1]
-    return math.exp(z[0] + z[1] * y + z[2] * y * y)
-
-
 # ---------------------------------------------------------------- Black-Scholes with a switching volatility
 def bs_switching(u, r, sigmas):
     """dX = (r - sigma_y^2 / 2) dt + sigma_y dW for X = log S. E[exp(i u (X_T - X_0)) | y_0 = i] = a_i(T) with

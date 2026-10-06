@@ -4,31 +4,7 @@ import math
 import cmath
 import numpy as np
 from .fastswitch import FastSwitch, numerical_a_callable, _finished
-from .models import bs_switching, vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
-
-
-def _nodes(U, n):
-    x, w = np.polynomial.legendre.leggauss(n)
-    return (x + 1) * U / 2, w * U / 2
-
-
-def bs_call(S0, K, T, r, sigmas, Q, start, order=None, U=None, n=96):
-    """European call; order=None uses the numerical solution of the reduced system. The Fourier integral stops
-    where the characteristic function falls below exp(-40); beyond that the regimes' exponents differ by more
-    than the switching rate and the expansion does not apply."""
-    if U is None:
-        Qa = np.asarray(Q, float)
-        wv, vl = np.linalg.eig(Qa.T)
-        pi = np.real(vl[:, np.argmin(abs(wv))])
-        pi = pi / pi.sum()
-        U = math.sqrt(80 / (float(pi @ np.asarray(sigmas) ** 2) * T))
-    us, ws = _nodes(U, n)
-    k, tot = math.log(S0 / K), 0.0
-    for u, w in zip(us, ws):
-        g, gf = bs_switching(u - 0.5j, r, sigmas)
-        phi = numerical_a_callable(T, Q, gf, rtol=1e-12)[start] if order is None else FastSwitch(Q, g, order=order).a(T, order)[start]
-        tot += w * (cmath.exp(1j * u * k) * phi).real / (u * u + 0.25)
-    return S0 - math.sqrt(S0 * K) * math.exp(-r * T) / math.pi * tot
+from .models import vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
 
 
 # 15-point Kronrod rule with the embedded 7-point Gauss rule (QUADPACK qk15): the Gauss nodes are every second

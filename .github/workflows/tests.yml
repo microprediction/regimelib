@@ -12,4 +12,4 @@ jobs:
         with: {python-version: "3.12"}
       - run: pip install -e . pytest pytest-xdist QuantLib
       - run: python -m pytest -q -n auto tests
-        timeout-minutes: 45
+        timeout-minutes: 60

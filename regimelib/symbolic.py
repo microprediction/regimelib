@@ -231,7 +231,12 @@ class TwoStateConstantForcing:
             names = sorted(str(s) for s in expr.free_symbols)
             self._fn[key] = (names, sp.lambdify([sp.Symbol(n) for n in names], expr, "mpmath"))
         names, f = self._fn[key]
-        return complex(f(*[values[n] for n in names]))
+        try:
+            return complex(f(*[values[n] for n in names]))
+        except ZeroDivisionError:
+            raise ValueError("the two eigenvalues of Q + diag g coincide at these values, where this formula divides by "
+                             "their difference; the limit is e^{mu T} (I + T (M - mu I)) 1. Move a parameter slightly, "
+                             "or use NumericalSwitchingEngine.") from None
 
 
 # ---------------------------------------------------------------- CIR with a switching mean level, first order
