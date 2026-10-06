@@ -269,7 +269,8 @@ class SwitchingVarianceGammaProcess(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
         self.sigma, self.nu, self.theta = _per_regime(sigma, self.n, "sigma"), _per_regime(nu, self.n, "nu"), _per_regime(theta, self.n, "theta")
-        _nonnegative(self.nu, "nu")
+        _check(self.nu, "nu", lambda v: v > 0.0, "finite and positive (as nu tends to zero the model is Black-Scholes: "
+               "use SwitchingBlackScholesProcess)")
         for i, (sg, nu_, th) in enumerate(zip(self.sigma, self.nu, self.theta)):
             if not (math.isfinite(sg) and math.isfinite(th)) or 1.0 - th * nu_ - 0.5 * sg * sg * nu_ <= 0.0:
                 raise ValueError("variance gamma needs finite sigma and theta with 1 - theta nu - sigma^2 nu / 2 > 0 in every "
@@ -358,6 +359,7 @@ class SwitchingG2(SwitchingModel):
     dy = -b y dt + eta dW2, corr rho, phi(t) fitted to the initial curve. sigma, eta and rho may switch; phi is fitted
     with the stationary-average covariance, so with every regime equal the model is QuantLib's."""
     _diffusion, _switching = ("sigma", "eta", "rho"), ("sigma", "eta", "rho")          # see regimelib.information
+    defaultGrid = (161, 81)                            # nodes in the two factors when an engine is given none
 
     def __init__(self, chain, termStructure, a, sigma, b, eta, rho):
         super().__init__(chain)

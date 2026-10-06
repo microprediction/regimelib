@@ -112,6 +112,9 @@ class Instrument:
             raise NotImplementedError("implied volatility inverts the European Black formula and does not apply to "
                                       + " or ".join(features))
         m = self._engine.model; T, K = self.maturity, self.strike
+        if not callable(getattr(m, "forward", None)) or getattr(m, "r", None) is None:
+            raise NotImplementedError("implied volatility needs a model with a forward price and a constant discount "
+                                      f"rate; {type(m).__name__} has none (a Black quote is not defined for it here)")
         F, disc = m.forward(T), math.exp(-m.r * T)
         target = self.NPV() if price is None else price
         N = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
@@ -184,6 +187,9 @@ class VanillaOption(Instrument):
             raise ValueError("give the maturity in years or as a QuantLib Date")
         self.maturity = _years(maturity, dayCounter)
         self.isAmerican = _exerciseStyle(exercise) == "american"
+        self.earliestExercise = 0.0                                      # the word "american" means from now
+        if self.isAmerican and hasattr(exercise, "dates"):
+            self.earliestExercise = max(0.0, _years(exercise.dates()[0], dayCounter))
 
     def payoffOnGrid(self, S):
         S = np.asarray(S, float)

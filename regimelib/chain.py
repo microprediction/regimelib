@@ -13,6 +13,19 @@ def stateIndex(value, n, name="regime"):
     return int(value)
 
 
+def _gth(Q):
+    """Stationary law of an irreducible generator by state reduction: only additions, multiplications and divisions of
+    nonnegative numbers, so no cancellation whatever the spread of the rates."""
+    A = np.array(Q, float); n = A.shape[0]
+    for k in range(n - 1, 0, -1):
+        A[:k, k] /= A[k, :k].sum()
+        A[:k, :k] += np.outer(A[:k, k], A[k, :k])
+    pi = np.zeros(n); pi[0] = 1.0
+    for k in range(1, n):
+        pi[k] = pi[:k] @ A[:k, k]
+    return pi / pi.sum()
+
+
 class RegimeChain:
     def __init__(self, generator):
         raw = np.array(generator)                                  # a copy: the chain owns its generator
@@ -38,10 +51,35 @@ class RegimeChain:
     def numberOfRegimes(self):
         return self.generator.shape[0]
 
+    def closedClasses(self):
+        """The sets of regimes that communicate and cannot be left. An irreducible chain has one, all of it; a chain
+        with an absorbing regime has one, that regime; a chain with more than one has no unique stationary law."""
+        from scipy.sparse.csgraph import connected_components
+        Q = self.generator; n = Q.shape[0]
+        adjacency = (Q - np.diag(np.diag(Q))) > 0
+        count, label = connected_components(adjacency, directed=True, connection="strong")
+        classes = [np.flatnonzero(label == c) for c in range(count)]
+        return [c for c in classes if not adjacency[np.ix_(c, np.setdiff1d(np.arange(n), c))].any()]
+
     def stationaryDistribution(self):
-        w, v = np.linalg.eig(self.generator.T)
-        pi = np.real(v[:, np.argmin(abs(w))])
-        return pi / pi.sum()
+        """The stationary law, computed without subtraction (Grassmann, Taksar and Heyman), so it is nonnegative and
+        accurate on stiff chains. With several closed classes there is no unique one: this returns the long-run law
+        from a uniform start, and the expansion engines, which need uniqueness, refuse such a chain."""
+        Q = self.generator; n = Q.shape[0]
+        closed = self.closedClasses()
+        pi = np.zeros(n)
+        weights = [1.0]
+        if len(closed) > 1:                                    # share of a uniform start that ends in each class
+            inside = np.concatenate(closed); transient = np.setdiff1d(np.arange(n), inside)
+            weights = []
+            for c in closed:
+                absorbed = 0.0
+                if len(transient):
+                    absorbed = float(np.linalg.solve(Q[np.ix_(transient, transient)], -Q[np.ix_(transient, c)].sum(axis=1)).sum())
+                weights.append((len(c) + absorbed) / n)
+        for c, weight in zip(closed, weights):
+            pi[c] = weight * _gth(Q[np.ix_(c, c)])
+        return pi
 
     def meanHoldingTime(self):
         """The expansion scale of the engine: n / -trace Q."""

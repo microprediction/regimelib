@@ -64,7 +64,7 @@ def deterministicEquity(m, instrument):
             return math.exp(-m.r * math.log(b / S0) / mu) * instrument.rebate if crosses else pay(T)
         return pay(T) if crosses else math.exp(-m.r * T) * instrument.rebate
     if getattr(instrument, "isAmerican", False):
-        return max(pay(t) for t in np.linspace(0.0, T, 4001))
+        return max(pay(t) for t in np.linspace(getattr(instrument, "earliestExercise", 0.0), T, 4001))
     return pay(T)
 
 
@@ -265,6 +265,7 @@ class SwitchingEngine:
         if not isinstance(instrument, VanillaOption):
             return None
         K, S0, call = instrument.strike, m.S0, instrument.isCall
+        novega = {"vega": 0.0} if hasattr(m, "v0") else {}               # a payoff or a forward does not depend on v0
         if isinstance(instrument, ContinuousGeometricAsianOption):
             if T == 0:                                                   # the average of a single point
                 return {"value": float(instrument.payoffOnGrid([S0])[0])}
@@ -279,7 +280,7 @@ class SwitchingEngine:
             side = 1.0 if call else -1.0                                 # delta is one-sided; at the strike it is the midpoint
             inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
             theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else 0.0) * K)
-            return {"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}
+            return dict({"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}, **novega)
         if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
             if isinstance(m, SwitchingEquityRates):
                 return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T) if call else 0.0}
@@ -289,9 +290,9 @@ class SwitchingEngine:
             if instrument.payoffType == "asset":
                 return {"value": S0 * dq if call else 0.0}
             if not call:
-                return {"value": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "rho": 0.0}
-            return {"value": S0 * dq - K * dr, "delta": dq, "gamma": 0.0, "theta": m.q * S0 * dq - m.r * K * dr,
-                    "rho": T * K * dr}
+                return dict({"value": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "rho": 0.0}, **novega)
+            return dict({"value": S0 * dq - K * dr, "delta": dq, "gamma": 0.0, "theta": m.q * S0 * dq - m.r * K * dr,
+                         "rho": T * K * dr}, **novega)
         if still == "deterministic":                                     # the terminal price is known: discounted payoff
             if isinstance(m, SwitchingEquityRates):                      # S_T = S0 e^{-qT} / P(0, T)
                 P = self._hybridBond(T); value = S0 * math.exp(-m.q * T) - K * P
@@ -542,6 +543,9 @@ class FastSwitchingEngine(SwitchingEngine):
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
     def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12, information="inferred"):
         super().__init__(model, regime, nodes, information)
+        if len(model.chain.closedClasses()) > 1:
+            raise ValueError("the fast-switching expansion needs a chain with one stationary law; this one has "
+                             f"{len(model.chain.closedClasses())} closed classes. Use NumericalSwitchingEngine.")
         order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None

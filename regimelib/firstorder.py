@@ -108,12 +108,12 @@ class Grid2D:
         return float(f([p])[0])
 
 
-def _gridSize(model, n):
+def _gridSize(model, n, line=801):
     """The node count when none is given: 801 on a line; for a model on a plane its own tested default, since 801 in
     each direction is 640,000 nodes per regime. A scalar given for a plane is refused when it is that large."""
     planar = getattr(model, "defaultGrid", None)
     if n is None:
-        return planar or 801
+        return planar or line
     if planar is not None and np.isscalar(n) and n * n > 250000:
         raise ValueError(f"n = {n} in each of two directions is {n * n} nodes per regime; give n as (nx, nv), e.g. {planar}")
     return n
@@ -124,6 +124,9 @@ class FirstOrderFDEngine:
     payoff(grid), x0)."""
     def __init__(self, model, regime=0, n=None, width=None, warnAbove=0.03, stretch=None):
         self.model, self.n, self.width, self.stretch = model, _gridSize(model, n), width, stretch
+        if len(model.chain.closedClasses()) > 1:
+            raise ValueError("the first-order expansion needs a chain with one stationary law; this one has "
+                             f"{len(model.chain.closedClasses())} closed classes. Use SwitchingFDReferee.")
         self.regime, self.belief = startingBelief(regime, model.n)
         self.averaged = self.correction = self.memory = None
         self.warnAbove = warnAbove; self.diagnostics = {}

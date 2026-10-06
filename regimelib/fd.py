@@ -17,13 +17,14 @@ from .information import startingBelief, checkInformation, regimeIsKnown, byBeli
 class SwitchingFDEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, n=1001, steps=400, width=None, stretch=None, information="inferred"):
+    def __init__(self, model, regime=0, n=None, steps=400, width=None, stretch=None, information="inferred"):
         """`stretch` concentrates the nodes of a two-dimensional grid around the strike and the starting factor
         (the width of the dense region as a fraction of the interval, 0.1 to 0.3 is usual); None is uniform."""
         import numbers
         if isinstance(steps, bool) or not isinstance(steps, numbers.Integral) or steps < 1:
             raise ValueError(f"steps must be a positive integer number of time steps, got {steps!r}")
-        self.model, self.n, self.steps, self.width, self.stretch = model, n, int(steps), width, stretch
+        from .firstorder import _gridSize
+        self.model, self.n, self.steps, self.width, self.stretch = model, _gridSize(model, n, 1001), int(steps), width, stretch
         self.regime, self.belief = startingBelief(regime, model.n)      # a regime index, or a belief over the regimes
         self.information = checkInformation(information)
 
@@ -40,9 +41,11 @@ class SwitchingFDEngine:
                 blocks[i][k] = Li + Q[i, i] * I if i == k else Q[i, k] * I
         return sp.bmat(blocks, format="csr"), grid, u0, x0, nR
 
-    def _march(self, Big, u, T, project=None, fixed=None):
-        """Rannacher start then Crank-Nicolson; `project` is applied after each step, `fixed` is (indices, value)."""
+    def _march(self, Big, u, T, project=None, fixed=None, window=None):
+        """Rannacher start then Crank-Nicolson; `project` is applied after each step, `fixed` is (indices, value).
+        `window` is the longest time to maturity at which exercise is allowed (all of them when None)."""
         N = Big.shape[0]; I = sp.identity(N, format="csr"); dt = T / self.steps
+        allowed = lambda tau: project is not None and (window is None or tau <= window + 1e-12)
         if fixed is not None:
             idx, val = fixed
             keep = np.ones(N); keep[idx] = 0.0
@@ -53,14 +56,14 @@ class SwitchingFDEngine:
         for k in range(self.steps):
             if k < 2:                                                    # two implicit Euler half steps, each projected
                 u = half.solve(u)
-                if project is not None:
+                if allowed((k + 0.5) * dt):
                     u = np.maximum(u, project)
                 if fixed is not None:
                     u[idx] = val
                 u = half.solve(u)
             else:
                 u = full_l.solve(full_r @ u)
-            if project is not None:
+            if allowed((k + 1) * dt):
                 u = np.maximum(u, project)
             if fixed is not None:
                 u[idx] = val
@@ -173,8 +176,14 @@ class SwitchingFDEngine:
             out = self._barrier(instrument)
         else:
             Big, grid, u0, x0, nR = self._system(instrument, self.width)
-            v = self._march(Big, np.tile(u0, nR), instrument.maturity, project=np.tile(u0, nR) if instrument.isAmerican else None)
+            T = instrument.maturity
+            v = self._march(Big, np.tile(u0, nR), T, project=np.tile(u0, nR) if instrument.isAmerican else None,
+                            window=T - getattr(instrument, "earliestExercise", 0.0))
             out = self._greeks(grid, v, x0, Big, nR)
+            if instrument.isAmerican and getattr(instrument, "earliestExercise", 0.0) <= 0.0:
+                held = float(instrument.payoffOnGrid([self.model.S0])[0])
+                if held > 0 and out["value"] <= held * (1 + 1e-9):       # exercised now: the value is the payoff,
+                    out["theta"] = 0.0                                   # which does not change with the date
         return out if results else out["value"]
 
     def _barrier(self, opt):
@@ -227,12 +236,14 @@ class SwitchingFDEngine:
         steps = self.steps
         u = exerciseValue(T_end).ravel()
         t_hi = T_end
-        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
+        for t_lo in reversed(exercises[:-1]):                            # each earlier exercise date, time zero included
             self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
             u = self._march(Big, u, t_hi - t_lo)
-            if t_lo > 0:
-                u = np.maximum(u, exerciseValue(t_lo).ravel())
+            u = np.maximum(u, exerciseValue(t_lo).ravel())
             t_hi = t_lo
+        if t_hi > 0:                                                     # and from the first exercise date to today
+            self.steps = max(4, int(round(steps * t_hi / T_end)))
+            u = self._march(Big, u, t_hi)
         self.steps = steps
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
         return {"value": m.deterministicDiscount(0.0, T_end) * grid.interp(u[blk], r0)}
@@ -286,13 +297,14 @@ class SwitchingFDEngine:
         steps = self.steps
         u = np.maximum(value(T_end), 0.0)
         t_hi = T_end
-        for t_lo in list(reversed(exercises[:-1])) + [0.0]:
-            if t_hi > t_lo:
-                self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
-                u = self._march(L, u, t_hi - t_lo)
-            if t_lo > 0:
-                u = np.maximum(u, value(t_lo))
+        for t_lo in reversed(exercises[:-1]):
+            self.steps = max(4, int(round(steps * (t_hi - t_lo) / T_end)))
+            u = self._march(L, u, t_hi - t_lo)
+            u = np.maximum(u, value(t_lo))
             t_hi = t_lo
+        if t_hi > 0:
+            self.steps = max(4, int(round(steps * t_hi / T_end)))
+            u = self._march(L, u, t_hi)
         self.steps = steps
         p0 = float(self.belief[0]) if self.belief is not None else (1.0 if self.regime == 0 else 0.0)
         return {"value": grid.interp(u, (r0, p0))}
