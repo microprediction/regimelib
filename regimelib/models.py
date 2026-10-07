@@ -454,7 +454,9 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         xi = np.asarray(self.xi, float); xibar, xi2bar = float(pi @ xi), float(pi @ xi ** 2)
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
-        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, 5 * vtop, nv, centers=(math.log(K), self.v0), stretch=stretch)
+        # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
+        vmax = max(5 * vtop, vtop + 5 * math.sqrt(self.theta * xi2bar / (2 * self.kappa))) if self.kappa > 0 else 5 * vtop
+        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
         A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
@@ -488,7 +490,8 @@ class SwitchingIntensityBasket(SwitchingModel):
         if len({type(p[0][0]) for p in parts}) > 1:                    # exponential sums and Chebyshev series: fit all
             parts = [([Cheb.fit(gf, T, 80) for gf in p[1]], p[1], p[2]) for p in parts]
         g = [sum((p[0][i] for p in parts[1:]), parts[0][0][i]) for i in range(self.n)]
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        # the numerical engine integrates the names' own functions, not the series fitted for the expansion
+        gfuncs = [(lambda fs: (lambda t: sum(f(t) for f in fs)))([p[1][i] for p in parts]) for i in range(self.n)]
         pres = [p[2] for p in parts]
         return g, gfuncs, (lambda t: math.prod(pre(t) for pre in pres))
 
@@ -499,7 +502,10 @@ class SwitchingIntensityBasket(SwitchingModel):
         def surv(model):
             return NumericalSwitchingEngine(model, regime=regime)._survival(t)
         q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
-        return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
+        if not (1e-10 < q1 < 1 - 1e-10 and 1e-10 < q2 < 1 - 1e-10):
+            raise ValueError(f"the survival probabilities to t = {t:g} are {q1:.3g} and {q2:.3g}: a default indicator "
+                             "that is all but certain has no variance to correlate, within what the solver resolves")
+        return min(1.0, max(-1.0, (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))))
 
 
 # ---------------------------------------------------------------- operator form for the first-order tier

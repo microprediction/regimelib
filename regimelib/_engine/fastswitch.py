@@ -372,8 +372,9 @@ class Cheb:
     """A smooth function on [0, T] held as a Chebyshev series; same interface as ExpSum."""
     MAXDEG = 120
 
-    def __init__(self, series):
+    def __init__(self, series, unresolved=0.0):
         self.s = series
+        self.unresolved = unresolved         # the size of a fit's last coefficients against its largest: see fit
 
     @classmethod
     def fit(cls, f, T, deg=80):
@@ -389,7 +390,11 @@ class Cheb:
         # drop the noise-level tail: high Taylor derivatives at 0 amplify it by roughly deg^(2k)
         c = series.coef
         keep = np.nonzero(np.abs(c) > 1e-14 * np.abs(c).max())[0]
-        return cls(series.truncate(int(keep[-1]) + 1 if len(keep) else 1))
+        # coefficients that have not decayed by the last two mean a function sharper than this degree resolves (a
+        # layer near zero, say). The series is still returned; the expansion built on it would carry the error
+        # silently, so the fast engine reads this and solves from the function itself instead
+        tail = float(np.abs(c[-2:]).max() / max(np.abs(c).max(), 1e-300)) if len(c) > 2 else 0.0
+        return cls(series.truncate(int(keep[-1]) + 1 if len(keep) else 1), unresolved=tail)
 
     def _wrap(self, s):
         """Cap the degree at MAXDEG, dropping only a tail at rounding level; a larger tail raises."""
@@ -404,20 +409,23 @@ class Cheb:
             s = s.truncate(self.MAXDEG + 1)
         return Cheb(s)
 
+    def _with(self, out, o=None):
+        out.unresolved = max(self.unresolved, getattr(o, "unresolved", 0.0)); return out
+
     def __add__(self, o):
-        return self._wrap(self.s + o.s)
+        return self._with(self._wrap(self.s + o.s), o)
 
     def __sub__(self, o):
-        return self._wrap(self.s - o.s)
+        return self._with(self._wrap(self.s - o.s), o)
 
     def scale(self, c):
-        return Cheb(self.s * c)
+        return self._with(Cheb(self.s * c))
 
     def __mul__(self, o):
-        return self._wrap(self.s * o.s)
+        return self._with(self._wrap(self.s * o.s), o)
 
     def deriv(self):
-        return Cheb(self.s.deriv())
+        return self._with(Cheb(self.s.deriv()))
 
     def value(self, t):
         return self.s(t)

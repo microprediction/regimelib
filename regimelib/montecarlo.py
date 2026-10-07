@@ -56,6 +56,8 @@ class MonteCarloSwitchingEngine:
     @byBelief(rss=("standardError",))
     def calculate(self, instrument):
         m, T = self.model, instrument.maturity
+        if not (math.isfinite(T) and T >= 0.0):
+            raise ValueError(f"the maturity must be finite and nonnegative, not {T!r}")
         vals = []
         if isinstance(instrument, ZeroCouponBond) and isinstance(m, SwitchingVasicek):
             a = m.a

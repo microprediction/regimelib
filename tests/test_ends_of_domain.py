@@ -49,6 +49,7 @@ def test_zero_maturity_greeks_are_those_of_the_payoff():
     assert near.NPV() == pytest.approx(10.0, abs=1e-4) and near.delta() == pytest.approx(1.0, abs=1e-6)
 
 
+@pytest.mark.slow
 @pytest.mark.parametrize("K", [0.0, -0.1])
 def test_nonpositive_strikes_on_equity(K):
     T, dq, dr = 1.0, math.exp(-0.01), math.exp(-0.02)

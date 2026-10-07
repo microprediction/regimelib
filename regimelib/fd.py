@@ -204,6 +204,10 @@ class SwitchingFDEngine:
         Big, grid, u0, _, nR = self._system(opt, self.width)
         L = (grid.x[-1] - grid.x[0]) / 2
         ends = (b, b + 2 * L) if not opt.isUp else (b - 2 * L, b)
+        if not ends[0] < x0 < ends[1]:
+            raise ValueError("the barrier is farther from the spot than the grid is wide, so the grid that ends at the "
+                             "barrier does not hold the spot. The barrier is then all but unreachable: price the vanilla "
+                             "(a knock-out) or nothing (a knock-in), or pass a larger width.")
         BigB, gridB, u0B, _, _ = self._system(opt, ends)
         bnode = 0 if not opt.isUp else gridB.n - 1
         idx = np.array([r * gridB.n + bnode for r in range(nR)])
@@ -217,6 +221,7 @@ class SwitchingFDEngine:
         vVan = self._march(Big, np.tile(u0, nR), T)
         van = self._greeks(grid, vVan, x0, Big, nR)
         out = {k: van[k] - res[k] for k in van}
+        out["value"] = max(out["value"], 0.0)                            # the difference of two grids, far from the barrier
         if opt.rebate:                                                   # the discounted probability of never hitting
             vS = self._march(BigB, np.ones(nR * gridB.n), T, fixed=(idx, 0.0))
             never = self._greeks(gridB, vS, x0, BigB, nR)

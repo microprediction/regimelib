@@ -138,6 +138,7 @@ def test_heston_without_vol_of_vol_at_small_and_zero_reversion():
                 assert math.isfinite(option.theta())
 
 
+@pytest.mark.slow
 def test_equity_with_rates_at_small_and_zero_reversion():
     def hybrid(a, rho):
         return rl.SwitchingEquityRates(rl.SwitchingBlackScholesProcess(FAST, 100.0, 0.0, 0.0, [0.3, 0.15]),

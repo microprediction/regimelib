@@ -8,6 +8,7 @@ import regimelib as rl
 CHAIN = rl.RegimeChain.twoState(3.0, 5.0)
 
 
+@pytest.mark.slow
 def test_belief_diagnostics_are_the_worst_case_and_do_not_depend_on_labels():
     def run(chain, sigma, belief):
         model = rl.SwitchingBlackScholesProcess(chain, 100.0, 0.02, 0.0, sigma)

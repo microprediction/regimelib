@@ -416,9 +416,8 @@ class SwitchingEngine:
         k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(forward / K)))
         I0 = sum(w * (cmath.exp(-1j * u * k) * psi(u - 0.5j)).real / (u * u + 0.25) for u, w in zip(us, ws))
         call = m.S0 * math.exp(-m.q * T) - math.sqrt(K) / math.pi * I0
-        if opt.isCall:
-            return {"value": call}
-        return {"value": call - m.S0 * math.exp(-m.q * T) + K * bond}
+        floor = m.S0 * math.exp(-m.q * T) - K * bond
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _geometricAsian(self, opt):
         """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
@@ -433,7 +432,14 @@ class SwitchingEngine:
         if K <= 0:                                                       # the average is positive: a forward, or nothing
             return {"value": math.exp(-m.r * T) * (FG - K) if opt.isCall else 0.0}
         k = math.log(FG / K); lf = math.log(FG / m.S0)
-        U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
+        # the average is narrower than the terminal value, so its transform decays more slowly: size the range from it
+        def size(u):
+            g, gfuncs = m.averageForcing(u - 0.5j, T)
+            return abs(_numericalAVector(m.chain.generator, g, gfuncs, T, 1e-10)[self.regime] * cmath.exp(-1j * (u - 0.5j) * lf))
+        U = self._frequencyLimit(T, k)
+        while U < 1e4 and size(U) > 1e-12:
+            U *= 2
+        us, ws = _gauss(U, self._nodeCount(U, k))
         I0 = 0.0
         for u, w in zip(us, ws):
             z = u - 0.5j
@@ -441,7 +447,8 @@ class SwitchingEngine:
             I0 += w * e.real / (u * u + 0.25)
         disc = math.exp(-m.r * T)
         call = disc * (FG - math.sqrt(FG * K) / math.pi * I0)
-        return {"value": call if opt.isCall else call - disc * (FG - K)}
+        floor = disc * (FG - K)
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _order(self):
         return None
@@ -474,10 +481,10 @@ class SwitchingEngine:
             else:
                 dphi = prev * dvec[self.regime]
             It += w * (cmath.exp(1j * u * k) * ((0.5 + 1j * u) * mu * phi + dphi)).real / (u * u + 0.25)
-        disc = math.exp(-m.r * T); root = math.sqrt(F * K)
+        disc = math.exp(-m.r * T); root = math.sqrt(F) * math.sqrt(K)      # not sqrt(F K): the product can overflow
         call = disc * (F - root / math.pi * I0)
         delta = disc * dF * (1 - root / (math.pi * F) * I1)
-        gamma = disc * dF * dF * root / (math.pi * F * F) * I2
+        gamma = disc * (dF / F) * root / math.pi * I2 * (dF / F)    # in this order: neither F^2 nor 1 / F^2 is formed
         dC_dT = -m.r * call + disc * (mu * F - root / math.pi * It)
         rho = -T * call + disc * T * (F - root / math.pi * I1)
         out = dict(value=call, delta=delta, gamma=gamma, theta=-dC_dT, rho=rho)
@@ -487,6 +494,12 @@ class SwitchingEngine:
             out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
             out["theta"] = -(dC_dT - (-m.r * disc * (F - K) + disc * mu * F))
             out["rho"] = rho - T * K * disc
+        if getattr(self, "_left", 0.0) > 1e-2:
+            # gamma's integrand is the transform itself, with no 1 / u^2: where that has not decayed the density at the
+            # strike is not resolved (it may be infinite), and a number here would be the truncation
+            del out["gamma"]
+        # the absolute error of the integral is all that is left of a value far out of the money
+        out["value"] = max(out["value"], disc * (F - K) * (1.0 if opt.isCall else -1.0), 0.0)
         return out
 
     def _aVector(self, g, gfuncs, T, a0=None):
@@ -505,7 +518,7 @@ class SwitchingEngine:
             g, gfuncs, pre = m.returnForcing(u + shift, T)
             phi = pre() * self._a(g, gfuncs, T)
             I += w * (cmath.exp(-1j * u * k) * phi / (1j * u)).real
-        prob = 0.5 + I / math.pi                              # P(S_T > K) under the relevant measure
+        prob = min(max(0.5 + I / math.pi, 0.0), 1.0)          # P(S_T > K) under the relevant measure
         if opt.payoffType == "cash":
             value = disc * opt.cash * (prob if opt.isCall else 1 - prob)
         else:
@@ -543,6 +556,22 @@ class SwitchingEngine:
         U = 8.0
         while size(U) > 1e-14 and U < 1e4:
             U *= 2
+        # the averaged model bounds a chain that mixes within the maturity. From a regime of low volatility that the
+        # chain may not leave, the transform decays more slowly than the average: follow the one being inverted
+        Q = m.chain.generator
+        def actual(u):
+            g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
+            return abs(pre() * _numericalAVector(Q, g, gfuncs, T, 1e-10)[self.regime])
+        while m.n > 1 and U < 1e4 and actual(U) > 1e-12:
+            U *= 2
+        left = max(size(U), actual(U) if m.n > 1 else 0.0)
+        if left > 1e-7 * U:
+            # the price integrand is the transform over u^2, so what is cut off is about left / U of the spot
+            raise ArithmeticError(f"the characteristic function is still {left:.2g} at u = {U:g}, the largest frequency "
+                                  "integrated: the law has an atom (jumps with no diffusion in some regime) or a density "
+                                  "too peaked to invert (a very small volatility, or a variance-gamma maturity far below "
+                                  "nu). The transform engines do not price this; give the regime a volatility.")
+        self._left = left * U                                    # of the undamped integrals (gamma), what is cut off
         return U
 
     def _nodeCount(self, U, k):
@@ -588,7 +617,7 @@ class FastSwitchingEngine(SwitchingEngine):
         base = np.ones(self.model.n, complex); later = None
         with np.errstate(all="ignore"):
             try:
-                if rare:
+                if rare or any(getattr(gi, "unresolved", 0.0) > 1e-9 for gi in g):   # or a forcing its series misses
                     raise ValueError
                 fs = FastSwitch(Q, g, order=N + 1, a0=a0)
                 base = np.asarray(fs.a(T, 0), complex)
