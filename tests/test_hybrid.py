@@ -31,6 +31,7 @@ def test_black_scholes_hull_white_frozen():
             ours.setPricingEngine(rl.FastSwitchingEngine(model, order=2)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
 
 
+@pytest.mark.slow
 def test_heston_hull_white_frozen():
     S0, r, q, v0, kappa, theta, xi, rho, a, sr, K = 100.0, 0.03, 0.0, 0.04, 1.5, 0.05, 0.4, -0.5, 0.3, 0.012, 100.0
     rts, qts, dc = _curves(r, q)

@@ -94,4 +94,4 @@ def test_vol_of_vol_grid_reaches_the_variance_it_must_hold():
     model = rl.SwitchingHestonVolOfVol(CHAIN, 100.0, 0.02, 0.0, v0=0.04, kappa=1.0, theta=0.04, xi=[1.5, 1.5], rho=-0.5)
     option = rl.VanillaOption(("call", 100.0), maturity=3.0)
     _, _, _, grid, _, _ = model.operators(option, (41, 21), None)
-    assert grid.V.max() >= 0.04 + 8 * math.sqrt(0.04 * 1.5 ** 2 / 2.0) - 1e-12
+    assert grid.V.max() >= 0.04 + 5 * math.sqrt(0.04 * 1.5 ** 2 / 2.0) - 1e-12

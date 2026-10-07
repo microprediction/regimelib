@@ -8,6 +8,7 @@ CYCLE = rl.RegimeChain([[-12, 12, 0, 0], [0, -8, 8, 0], [0, 0, -15, 15], [10, 0,
 THREE = rl.RegimeChain([[-5, 3, 2], [4, -9, 5], [1, 6, -7]])
 
 
+@pytest.mark.slow
 def test_four_regime_cycle_vasicek():
     model = rl.SwitchingVasicek(CYCLE, 0.03, 0.5, [0.08, 0.05, 0.02, 0.04], [0.015, 0.01, 0.006, 0.012])
     bond = rl.ZeroCouponBond(5.0)

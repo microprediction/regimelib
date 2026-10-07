@@ -455,7 +455,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
         # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
-        vmax = max(5 * vtop, vtop + 8 * math.sqrt(self.theta * float(np.max(xi ** 2)) / (2 * self.kappa))) if self.kappa > 0 else 5 * vtop
+        vmax = max(5 * vtop, vtop + 5 * math.sqrt(self.theta * xi2bar / (2 * self.kappa))) if self.kappa > 0 else 5 * vtop
         x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
