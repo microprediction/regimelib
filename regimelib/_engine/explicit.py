@@ -108,6 +108,12 @@ def two_state_constant_exact(gbar, gt, lam, t, sign=+1):
         z = s * t
         shc = cmath.sinh(z) / z if z else 1.0                # sinh(s t) / (s t)
         return cmath.exp((gbar - lam) * t) * (cmath.cosh(z) + b * t * shc)
-    p = b / s
     lead = gt * gt / (s + lam)                               # s - lam without the cancellation that loses it when lam >> |gt|
-    return 0.5 * (1 + p) * cmath.exp((gbar + lead) * t) + 0.5 * (1 - p) * cmath.exp((gbar - lam - s) * t)
+    # the weights (1 +/- p) / 2 = (s +/- b) / (2 s): the smaller of s + b and s - b from their product,
+    # s^2 - b^2 = -/+ 2 lam gt, so that a rare transition's weight of order lam / |gt| is kept
+    up, down = s + b, s - b
+    if abs(up) < abs(down):
+        up = -2 * sign * lam * gt / down
+    elif down != 0:
+        down = -2 * sign * lam * gt / up
+    return up / (2 * s) * cmath.exp((gbar + lead) * t) + down / (2 * s) * cmath.exp((gbar - lam - s) * t)
