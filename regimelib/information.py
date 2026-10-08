@@ -53,16 +53,29 @@ def _signature(model, which):
     return [tuple(r) for r in rows]
 
 
+def _asCovariance(model, sig):
+    """Two factors (sigma, eta, rho) act through their instantaneous covariance matrix, not through the three numbers
+    that build it: sigma = 0 with any rho is one matrix, and so is a change of sign of both volatilities."""
+    if all(hasattr(model, name) for name in ("sigma", "eta", "rho")) and len(sig[0]) == 3:
+        return [(s * s, e * e, r * s * e) for s, e, r in sig]
+    return sig
+
+
 def identical(model):
     """Every regime has the same parameters, so there is nothing to know."""
     sig = _signature(model, "_switching")
-    return sig is not None and all(s == sig[0] for s in sig)
+    if sig is None:
+        return False
+    sig = _asCovariance(model, sig)
+    return all(s == sig[0] for s in sig)
 
 
 def revealed(model):
     """The observed path identifies the regime at once: the diffusion coefficients differ between every two regimes."""
     sig = _signature(model, "_diffusion")
-    return sig is not None and len(set(sig)) == model.n and all(len(s) > 0 for s in sig)
+    if sig is None or not all(len(s) > 0 for s in sig):
+        return False
+    return len(set(_asCovariance(model, sig))) == model.n
 
 
 def regimeIsKnown(model):
