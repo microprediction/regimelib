@@ -554,6 +554,12 @@ def _bs_operators(self, instrument, n, width, stretch=None):
     # centred differences are monotone while the drift over a cell is at most the diffusion across it (a cell Peclet
     # number of two). Past that the carry dominates and the scheme oscillates and misprices without a sign of it
     quiet = float(np.min(s2[s2 > 0])) if np.any(s2 > 0) else 0.0
+    if quiet > 0.0 and np.any(s2 == 0.0) and self.r != self.q:
+        # the limit of the test below: with no diffusion in a regime its row is carry alone, at any grid size
+        raise ValueError(f"a regime with zero volatility beside regimes that diffuse, with a carry of "
+                         f"{self.r - self.q:.3g}: that regime's equation is pure advection (an infinite cell Peclet "
+                         "number), which centred differences misprice on any grid. This case is not priced; a small "
+                         "positive volatility there is, on a grid fine enough for it.")
     if quiet > 0.0:
         peclet = abs(self.r - self.q - 0.5 * quiet) * float(np.max(np.diff(grid.x))) / (0.5 * quiet)
         if peclet > 2.0:
