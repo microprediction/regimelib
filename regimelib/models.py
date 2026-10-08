@@ -22,6 +22,13 @@ def _per_regime(x, n, name="parameter"):
     return values
 
 
+def _spread(speed, T):
+    """What multiplies sigma^2 in the variance a grid must hold: the stationary 1 / (2 speed), or four times the
+    variance reached by T where that is smaller (a slow or absent reversion, whose stationary variance is unbounded)."""
+    reached = 4.0 * _m.ou_variance(speed, T)
+    return min(1.0 / (2.0 * speed), reached) if speed > 0 else reached
+
+
 def _check(values, name, ok, requirement):
     """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
     for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
@@ -92,7 +99,7 @@ class SwitchingVasicek(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            sd = math.sqrt(max(s2) / (2 * self.a)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            sd = math.sqrt(max(s2) * _spread(self.a, instrument.maturity)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
             grid = Grid1D(self.r0 - L, self.r0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift, Adiff = self.a * D1, 0.5 * D2
@@ -156,7 +163,7 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) / (2 * self.k))
+            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, instrument.maturity))
             grid = Grid1D(0.0, top, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift = self.k * D1
@@ -231,6 +238,8 @@ class SwitchingMerton76Process(SwitchingModel):
         self.sigma = _per_regime(sigma, self.n, "sigma")
         self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        if not math.isfinite(self.logJumpMean):
+            raise ValueError("logJumpMean must be finite")
         _nonnegative(self.jumpIntensity, "jumpIntensity")
 
     def forward(self, T):
@@ -251,6 +260,8 @@ class SwitchingBatesModel(SwitchingModel):
         self.theta = _per_regime(theta, self.n, "theta")
         self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        if not math.isfinite(self.logJumpMean):
+            raise ValueError("logJumpMean must be finite")
         _correlation(self.rho); _nonnegative(self.v0, "v0"); _nonnegative(self.theta, "theta")
         _nonnegative(self.jumpIntensity, "jumpIntensity")
 

@@ -48,8 +48,9 @@ class MonteCarloSwitchingEngine:
             while t < T:
                 rate = -Q[y, y]
                 dwell = rng.exponential(1 / rate) if rate > 0 else math.inf
-                d = min(dwell, T - t); states.append(y); durs.append(d); t += d
-                if t < T:
+                last = dwell >= T - t                                   # decided before adding: t + d can stop an ulp short of T
+                d = min(dwell, T - t); states.append(y); durs.append(d); t = T if last else t + d
+                if not last:
                     p = Q[y].copy(); p[y] = 0; p /= p.sum(); y = rng.choice(n, p=p)
             yield np.array(states), np.array(durs)
 

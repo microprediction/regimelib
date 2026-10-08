@@ -9,7 +9,7 @@ import cmath
 import numpy as np
 from ._engine.options import _kronrod_nodes, settled
 from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable, _finished
-from ._engine.models import loadings, stable_B, ou_variance, refuse_hidden_variance
+from ._engine.models import loadings, stable_B, ou_variance, int_B2, refuse_hidden_variance
 
 
 def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T=None):
@@ -80,10 +80,11 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((1.0, A[j]), (0.0, -K))]
     # z = B_a x_T + B_b y_T has mean zero and, given the path of the chain, at most this variance
     vmax = (abs(Ba) * np.max(np.abs(sig)) * math.sqrt(ou_variance(a, T)) + abs(Bb) * np.max(np.abs(eta)) * math.sqrt(ou_variance(b, T))) ** 2
-    sure = settled(zstar, 0.0, 0.0, vmax, 1.0)
-    price = 0.0
-    for j, c0, weight in cases:
-        price += weight * (0.5 if sure[j] is None else sure[j]) * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real
+    terms = [weight * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real for j, c0, weight in cases]
+    # the integrated rate int (x + y) has at most this standard deviation, and its covariance with z moves z's mean
+    sdI = np.max(np.abs(sig)) * math.sqrt(int_B2(a, T)) + np.max(np.abs(eta)) * math.sqrt(int_B2(b, T))
+    sure = settled(zstar, 0.0, 0.0, vmax, 1.0, drift=sdI * math.sqrt(vmax), scale=max(abs(t) for t in terms))
+    price = sum(t * (0.5 if sure[j] is None else sure[j]) for t, (j, _, _) in zip(terms, cases))
     cases = [case for case in cases if sure[case[0]] is None]
     if not cases:
         return float(price)
@@ -91,15 +92,20 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
         # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
         # transform decays more slowly, so follow the transforms themselves
         beyond = lambda U: max(abs(np.asarray(a_vec(T, c0 - 1j * U, np.eye(m)[j], direct=True))[start]) for j, c0, _ in cases)
-        widest = 16 * U
-        while U < widest and beyond(U) > 1e-9:
+        widest = 16 * U; size = max(1.0, max(abs(t) for t in terms))     # against the terms, which a rate shift scales
+        while U < widest and beyond(U) > 1e-9 * size:
             U *= 2
-        if beyond(U) > 1e-9:
+        if beyond(U) > 1e-9 * size:
             raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
                                   "the stationary variance gives: the chain is slow against the expiry and this regime "
                                   "is far quieter than the others. Use SwitchingFDEngine for this option.")
     rate = max(abs(zs) for zs, known in zip(zstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    if panels is None and npan > 400:
+        # the exercise boundary is far from the state in units of the range integrated (a bond maturing just after
+        # expiry, at a strike away from par) and yet not far enough to be settled
+        raise ArithmeticError(f"the Gil-Pelaez integrals would need {npan:,} panels: the exercise boundary is "
+                              f"{rate:.3g} from the state's mean over a range of {U:.3g}. Use SwitchingFDEngine.")
     blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan); nu = len(us)
@@ -127,4 +133,6 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
         if err <= tol * max(1.0, abs(K)):                          # of the strike: the price scales with it
             return price + val
         npan *= 2
+        if npan > 800:
+            break
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} (error estimate {err:.1e})")

@@ -8,7 +8,7 @@ import cmath
 import numpy as np
 from scipy.optimize import brentq
 from ._engine.options import _kronrod_nodes, _terminal_vectors, settled
-from ._engine.models import vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
+from ._engine.models import vasicek_terminal, stable_B, ou_variance, int_B2, refuse_hidden_variance
 from ._engine.fastswitch import FastSwitch, numerical_a_callable
 
 
@@ -57,12 +57,14 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
             cases.append((j, bs[k], c * A[k][j]))                                # A_kj e^{-b_k x} 1{x < x*_j}
         cases.append((j, 0.0, -K))                                                # -K 1{x < x*_j}
     th = np.asarray(thetas, float)
-    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET),
-                   float(np.max(np.asarray(sigmas, float) ** 2)) * ou_variance(kappa, T), max(bs))
-    price = 0.0
+    terms = []
     for j, c0, weight in cases:
         a, Bv = a_vec(T, c0, np.eye(m)[j])
-        price += weight * (0.5 if sure[j] is None else sure[j]) * (a[start] * cmath.exp(-Bv * x0)).real
+        terms.append(weight * (a[start] * cmath.exp(-Bv * x0)).real)
+    s2max = float(np.max(np.asarray(sigmas, float) ** 2)); vmax = s2max * ou_variance(kappa, T)
+    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET), vmax, max(bs),
+                   drift=math.sqrt(vmax * s2max * int_B2(kappa, T)), scale=max(abs(t) for t in terms))
+    price = sum(t * (0.5 if sure[j] is None else sure[j]) for t, (j, _, _) in zip(terms, cases))
     cases = [case for case in cases if sure[case[0]] is None]
     if not cases:
         return price
@@ -72,15 +74,20 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
     if chosen:
         # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
         # transform decays more slowly, so follow the transforms themselves
-        widest = 16 * U
-        while U < widest and beyond(U) > 1e-9:
+        widest = 16 * U; size = max(1.0, max(abs(t) for t in terms))     # against the terms, which a rate shift scales
+        while U < widest and beyond(U) > 1e-9 * size:
             U *= 2
-        if beyond(U) > 1e-9:
+        if beyond(U) > 1e-9 * size:
             raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
                                   "the stationary variance gives: the chain is slow against the expiry and this regime "
                                   "is far quieter than the others. Use SwitchingFDEngine for this option.")
     rate = max(abs(xs - mean_xT) for xs, known in zip(xstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    if panels is None and npan > 400:
+        # the exercise boundary is far from the state in units of the range integrated (a bond maturing just after
+        # expiry, at a strike away from par) and yet not far enough to be settled
+        raise ArithmeticError(f"the Gil-Pelaez integrals would need {npan:,} panels: the exercise boundary is "
+                              f"{rate:.3g} from the state's mean over a range of {U:.3g}. Use SwitchingFDEngine.")
     blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan); nu = len(us)
@@ -109,4 +116,6 @@ def coupon_bond_call(T, cashflows, K, x0, start, kappa, thetas, sigmas, Q, order
         if err <= tol * max(1.0, abs(K)):                          # of the strike: the price scales with it
             return price + val
         npan *= 2
+        if npan > 800:
+            break
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} (error estimate {err:.1e})")

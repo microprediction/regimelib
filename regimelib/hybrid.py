@@ -80,7 +80,7 @@ class SwitchingEquityRates(SwitchingModel):
             # log S_T carries the integrated short rate as well as the equity's own diffusion
             Lx = (8 * (math.sqrt(max(sS ** 2) * T) + math.sqrt(max(sR ** 2) * _m.int_B2(R.a, T)))
                   + 2 * T * (max(abs(b).max(), abs(R.r0)) + abs(E.q)))
-            Lr = 6 * math.sqrt(max(sR ** 2) * (1 - math.exp(-2 * R.a * T)) / (2 * R.a)) + abs(b - R.r0).max()
+            Lr = 6 * math.sqrt(max(sR ** 2) * _m.ou_variance(R.a, T)) + abs(b - R.r0).max()
         else:
             Lx, Lr = (width, width) if np.isscalar(width) else width
         x0 = math.log(E.S0)
