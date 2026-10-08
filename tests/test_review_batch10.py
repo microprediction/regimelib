@@ -91,3 +91,58 @@ def test_monte_carlo_terminal_regime_is_the_one_held_at_maturity():
     engine = rl.MonteCarloSwitchingEngine(model, paths=200, seed=3)
     for states, durations in engine._paths(0.1 + 0.2):                    # a maturity that is not a sum of halves
         assert len(states) == 1 and durations.sum() == pytest.approx(0.1 + 0.2)
+
+
+def test_fixed_order_does_not_re_enter_a_series_past_its_smallest_term():
+    model = rl.SwitchingVasicek(rl.RegimeChain.twoState(0.3, 0.3), r0=0.0, a=0.25, b=[0.20, 0.25], sigma=[0.02, 0.25])
+    bond = rl.ZeroCouponBond(2.0)
+    bond.setPricingEngine(rl.NumericalSwitchingEngine(model, regime=1)); exact = bond.NPV()
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", rl.ExpansionWarning)
+        for order in (2, 3, 4, 5, 6):                                    # the second term grew: every order from there solves
+            bond.setPricingEngine(rl.FastSwitchingEngine(model, order=order, regime=1))
+            assert bond.NPV() == pytest.approx(exact, rel=1e-9)
+
+
+def test_convection_dominated_grid_is_refused():
+    model = rl.SwitchingBlackScholesProcess(rl.RegimeChain([[0.0]]), S0=100.0, r=0.05, q=0.0, sigma=[3e-4])
+    option = rl.VanillaOption(("call", 100.0 * math.exp(0.05)), maturity=1.0)
+    for engine in (rl.FirstOrderFDEngine(model), rl.SwitchingFDEngine(model)):
+        option.setPricingEngine(engine)
+        with pytest.raises(ValueError, match="Peclet"):
+            option.NPV()
+
+
+def test_g2_factors_that_nearly_cancel_are_refused_and_exact_cancellation_is_priced():
+    T, S, r = 1.0, 3.0, 0.03
+    option = rl.ZeroCouponBondOption("call", math.exp(-r * (S - T)), T, S)
+    near = rl.SwitchingG2(CHAIN, r, 0.5, 0.02, 0.5, 0.02, -1.0 + 5e-13)
+    option.setPricingEngine(rl.NumericalSwitchingEngine(near))
+    with pytest.raises(NotImplementedError, match="nearly cancel"):
+        option.NPV()
+    option.setPricingEngine(rl.NumericalSwitchingEngine(rl.SwitchingG2(CHAIN, r, 0.5, 0.02, 0.5, 0.02, -1.0)))
+    assert option.NPV() == pytest.approx(0.0, abs=1e-12)
+
+
+def test_g2_regime_is_revealed_by_the_covariance_not_by_its_parameters():
+    from regimelib.information import revealed
+    same = rl.SwitchingG2(CHAIN, 0.03, 0.5, [0.0, 0.0], 0.1, [0.01, 0.01], [0.3, -0.4])     # rho is idle when sigma = 0
+    different = rl.SwitchingG2(CHAIN, 0.03, 0.5, [0.01, 0.02], 0.1, [0.01, 0.01], [0.3, 0.3])
+    assert not revealed(same) and revealed(different)
+
+
+def test_replacing_a_callable_discount_curve_invalidates_the_results():
+    model = rl.SwitchingVasicek(CHAIN, 0.02, 0.5, [0.03, 0.01], [0.005, 0.005])
+    cds = rl.CreditDefaultSwap("buyer", 0.01, [1.0, 2.0], 0.4, discount=lambda t: math.exp(-0.01 * t))
+    cds.setPricingEngine(rl.NumericalSwitchingEngine(model)); first = cds.fairSpread(), cds._result("annuity")
+    cds.discount = lambda t: math.exp(-0.20 * t)
+    assert cds._result("annuity") < first[1] - 1e-3
+
+
+def test_bond_options_on_a_chain_with_several_closed_classes_are_refused_by_the_transform_engines():
+    chain = rl.RegimeChain([[0.0, 0.0], [0.0, 0.0]])
+    model = rl.SwitchingVasicek(chain, 0.03, 0.5, [0.05, 0.02], [0.01, 0.02])
+    option = rl.ZeroCouponBondOption("call", 0.9, 1.0, 3.0)
+    option.setPricingEngine(rl.NumericalSwitchingEngine(model, information="observed"))
+    with pytest.raises(NotImplementedError, match="closed classes"):
+        option.NPV()

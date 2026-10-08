@@ -186,6 +186,11 @@ class SwitchingEngine:
                 len(instrument.exerciseTimes) > 1 or abs(instrument.exerciseTimes[0] - T) > 1e-12):
             raise TypeError("the characteristic-function engine prices European swaptions; "
                             "use SwitchingFDEngine for Bermudan exercise")
+        if (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
+                and len(m.chain.closedClasses()) > 1):
+            # their Fourier range and quadrature are sized from the stationary law, and this chain has several
+            raise NotImplementedError("options on bonds and swaps are not priced by the transform engines on a chain "
+                                      f"with {len(m.chain.closedClasses())} closed classes; use SwitchingFDEngine")
         exact = self._exactAtTheEnds(instrument)                        # zero maturity, nonpositive strike
         if exact is not None:
             return exact if results else exact["value"]
@@ -632,11 +637,12 @@ class FastSwitchingEngine(SwitchingEngine):
                     raise ValueError
                 fs = FastSwitch(Q, g, order=N + 1, a0=a0)
                 base = np.asarray(fs.a(T, 0), complex)
-                avec = np.asarray(fs.a(T, N), complex)
-                prev = np.asarray(fs.a(T, N - 1), complex) if N >= 1 else base
-                prev2 = np.asarray(fs.a(T, N - 2), complex) if N >= 2 else prev
+                sums = [base] + [np.asarray(fs.a(T, k), complex) for k in range(1, N + 1)]     # every truncation up to N
+                avec = sums[-1]
+                prev = sums[-2] if N >= 1 else base
+                prev2 = sums[-3] if N >= 2 else prev
             except failures:
-                avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
+                avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base; sums = [base]
             else:
                 try:
                     later = np.asarray(fs.a(T, N + 1), complex)
@@ -654,6 +660,11 @@ class FastSwitchingEngine(SwitchingEngine):
                 last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
             diverging = (N >= 2 and last >= before and last > 1e-12) or not math.isfinite(last)
             diverging = diverging or (N >= 1 and max(last, before) > 0.5)    # a term half the size of the value
+            # an asymptotic series is kept up to its smallest term. A term that grew at any earlier order means that
+            # point was passed, even if the last one happens to be smaller than the one before it
+            with np.errstate(all="ignore"):
+                terms = [abs(sums[k][i] - sums[k - 1][i]) / scale for k in range(1, len(sums))]
+            diverging = diverging or any(terms[k] >= terms[k - 1] and terms[k] > 1e-12 for k in range(1, len(terms)))
         else:
             last, diverging = math.inf, True
         if not fallback:

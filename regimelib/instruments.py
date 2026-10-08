@@ -64,6 +64,9 @@ def _stateOf(obj, depth=0):
         return tuple(_stateOf(v, depth) for v in obj)
     if isinstance(obj, dict):
         return tuple((k, _stateOf(v, depth)) for k, v in sorted(obj.items()))
+    if callable(obj) and hasattr(obj, "__dict__") and not vars(obj):
+        # a plain function (a discount curve) holds no numbers to compare, so it is itself: another one is a change
+        return ("callable", id(obj))
     if hasattr(obj, "__dict__") and depth < 4:
         skip = ("averaged", "correction", "memory", "diagnostics", "orderUsed", "lastIncrement", "standardError")
         return (type(obj).__name__,) + tuple((k, _stateOf(v, depth + 1)) for k, v in sorted(vars(obj).items())

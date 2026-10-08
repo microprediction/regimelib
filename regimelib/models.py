@@ -531,6 +531,16 @@ def _bs_operators(self, instrument, n, width, stretch=None):
     else:
         L = width or 8 * math.sqrt(max(s2) * T) + 2 * abs(self.r - self.q) * T
         grid = Grid1D(x0 - L, x0 + L, n)
+    # centred differences are monotone while the drift over a cell is at most the diffusion across it (a cell Peclet
+    # number of two). Past that the carry dominates and the scheme oscillates and misprices without a sign of it
+    quiet = float(np.min(s2[s2 > 0])) if np.any(s2 > 0) else 0.0
+    if quiet > 0.0:
+        peclet = abs(self.r - self.q - 0.5 * quiet) * float(np.max(np.diff(grid.x))) / (0.5 * quiet)
+        if peclet > 2.0:
+            raise ValueError(f"the grid is too coarse for a volatility of {math.sqrt(quiet):.3g} against a carry of "
+                             f"{self.r - self.q:.3g}: the cell Peclet number is {peclet:.3g} (above 2), and centred "
+                             f"differences misprice there. Use about {int(n * peclet / 2) + 1} points, or a "
+                             "characteristic-function engine.")
     D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr")
     A = 0.5 * (D2 - D1)
     Lbar = (self.r - self.q) * D1 + s2bar * A - self.r * I

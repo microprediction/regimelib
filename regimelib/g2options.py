@@ -71,11 +71,21 @@ def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None,
     perRegime = (Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
                  + 2 * Ba * Bb * rho * sig * eta * ou_variance((a + b) / 2, T))
     scale = Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
-    if not np.all(perRegime <= 1e-12 * np.maximum(scale, 1e-300)):
-        refuse_hidden_variance(var if var > 1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy) else 0.0, [1.0], "a G2 bond option")
-    if var <= 1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy) or var == 0.0:
+    # "no variance" is what rounding leaves of an exact cancellation, a few units in the last place of the terms that
+    # cancel. Anything larger is a variance: near cancellation the option still has time value, of the order of its root
+    ROUND = 64 * np.finfo(float).eps
+    if not np.all(perRegime <= ROUND * np.maximum(scale, 1e-300)):
+        refuse_hidden_variance(var if var > ROUND * (Ba * Ba * Vx + Bb * Bb * Vy) else 0.0, [1.0], "a G2 bond option")
+    if var <= ROUND * (Ba * Ba * Vx + Bb * Bb * Vy) or var == 0.0:
         # B_a x_T + B_b y_T has no variance (no volatility, or exact cancellation): the bond at expiry is A_j in regime j
         return float(sum(max(A[j] - K, 0.0) * np.asarray(a_vec(T, 0.0, np.eye(m)[j]))[start].real for j in range(m)))
+    if var <= 1e-8 * (Ba * Ba * Vx + Bb * Bb * Vy):
+        # the factors cancel to within a part in 1e8 and not exactly: the transform of what is left is the difference
+        # of two large exponents at frequencies of 1 / sqrt(var), which this integral does not resolve
+        raise NotImplementedError("a G2 bond option whose two factors nearly cancel in the bond (variance "
+                                  f"{var:.3g} against {Ba * Ba * Vx + Bb * Bb * Vy:.3g} uncancelled) is not priced; "
+                                  "it has a small time value that is neither zero nor resolved. Move the correlation "
+                                  "away from -1 or +1, or set it there exactly.")
     zstar = [math.log(A[j] / K) for j in range(m)]
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((1.0, A[j]), (0.0, -K))]
     # z = B_a x_T + B_b y_T has mean zero and, given the path of the chain, at most this variance
