@@ -56,7 +56,9 @@ the American.
 .. function:: VanillaOption.impliedVolatility(price=None, accuracy=1e-10, maxEvaluations=200, minVol=1e-4, maxVol=4.0)
 
 The Black volatility reproducing the price (the instrument's own ``NPV()`` unless ``price`` is given), for a plain
-vanilla payoff, as QuantLib's ``VanillaOption.impliedVolatility``.
+vanilla payoff, as QuantLib's ``VanillaOption.impliedVolatility``. The search is over ``[minVol, maxVol]``;
+``maxVol=None`` widens it until the Black price reaches the target, and a price at the upper bound of the Black
+price, which no finite volatility reaches, is refused. The calibration helpers use ``maxVol=None``.
 
 .. function:: rl.BarrierOption(barrierType, barrier, rebate, payoff, exercise=None, maturity=None, dayCounter=None)
 

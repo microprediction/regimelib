@@ -231,8 +231,10 @@ class TwoStateConstantForcing:
             names = sorted(str(s) for s in expr.free_symbols)
             self._fn[key] = (names, sp.lambdify([sp.Symbol(n) for n in names], expr, "mpmath"))
         names, f = self._fn[key]
-        try:
-            return complex(f(*[values[n] for n in names]))
+        import mpmath
+        try:                                                 # the discriminant cancels as the eigenvalues approach each
+            with mpmath.workdps(DIGITS):                     # other: at DIGITS digits, as the other formulas here
+                return complex(f(*[mpmath.mpmathify(values[n]) for n in names]))
         except ZeroDivisionError:
             raise ValueError("the two eigenvalues of Q + diag g coincide at these values, where this formula divides by "
                              "their difference; the limit is e^{mu T} (I + T (M - mu I)) 1. Move a parameter slightly, "
@@ -278,6 +280,11 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
     def _forcings(self, k, thetas, **_):
         import numpy as np
         return ["theta"], np.array([-k * np.asarray(thetas, float)]), {"theta": lambda i, k, **kw: -k}
+
+    def parameterGreek(self, chain, wrt, regime=0, **params):
+        if params.get("k") == 0:                                         # dr = sigma sqrt(r) dW: neither the levels nor the
+            return 0.0                                                   # chain enter the law of the rate
+        return super().parameterGreek(chain, wrt, regime=regime, **params)
 
     @staticmethod
     def coefficientsFrom(pi, K, M, F, regime, dF=None, basePi=None, linear=False, **kw):

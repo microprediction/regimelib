@@ -43,7 +43,7 @@ class VolatilityHelper:
         return self.option.NPV()
 
     def impliedVolatility(self):
-        return self.option.impliedVolatility()
+        return self.option.impliedVolatility(maxVol=None)        # no ceiling: a quote of any size can be matched
 
     def calibrationError(self):
         """Relative price error, as QuantLib's RelativePriceError; the absolute error when the market value is zero."""
@@ -57,7 +57,8 @@ class VolatilityHelper:
 # The domain of a parameter by its attribute name. A name that is not listed is unbounded: rates, dividend yields, mean
 # levels of Gaussian rates and log jump means are any real number, and a wrong guess here would silently constrain a fit.
 _NONNEGATIVE = ("sigma", "eta", "xi", "v0", "jumpIntensity", "logJumpVol", "jumpMean")
-_POSITIVE = ("kappa", "a", "k", "nu", "S0")                      # reversion speeds, the gamma variance rate, the spot
+_SPEEDS = ("kappa", "a", "k")                                    # reversion speeds: zero is a supported limit
+_POSITIVE = ("nu", "S0")                                         # the gamma variance rate, the spot
 _TINY = 1e-8
 
 
@@ -65,16 +66,16 @@ def defaultBounds(model, name):
     """(lower, upper) for one calibrated parameter of `model`. Two names mean different things in different models:
     `theta` is a variance or square-root level (nonnegative) except in variance gamma, where it is a signed drift,
     and `b` is a signed mean level except in G2++, where it is a reversion speed."""
-    kind = type(model).__name__
+    from .models import SwitchingG2, SwitchingVarianceGammaProcess    # by class, so that a subclass keeps its domains
     if name == "chain":
         return 0.0, np.inf                                   # switching rates; zero closes a transition
     if name == "rho":
         return -1.0, 1.0
     if name == "theta":
-        return (-np.inf, np.inf) if "VarianceGamma" in kind else (0.0, np.inf)
+        return (-np.inf, np.inf) if isinstance(model, SwitchingVarianceGammaProcess) else (0.0, np.inf)
     if name == "b":
-        return (_TINY, np.inf) if kind == "SwitchingG2" else (-np.inf, np.inf)
-    if name in _NONNEGATIVE:
+        return (0.0, np.inf) if isinstance(model, SwitchingG2) else (-np.inf, np.inf)
+    if name in _NONNEGATIVE or name in _SPEEDS:
         return 0.0, np.inf
     if name in _POSITIVE:
         return _TINY, np.inf

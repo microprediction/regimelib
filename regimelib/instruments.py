@@ -105,7 +105,8 @@ class Instrument:
 
     def impliedVolatility(self, price=None, accuracy=1e-10, maxEvaluations=200, minVol=1e-4, maxVol=4.0):
         """Black volatility that reproduces the price (the instrument's NPV unless a price is given), for a vanilla
-        payoff, using the model's forward and discount; as QuantLib's VanillaOption.impliedVolatility."""
+        payoff, using the model's forward and discount; as QuantLib's VanillaOption.impliedVolatility. With
+        `maxVol=None` the search widens until the Black price reaches the target or stops growing."""
         import math
         from scipy.optimize import brentq
         if getattr(self, "payoffType", "vanilla") != "vanilla":
@@ -129,12 +130,22 @@ class Instrument:
             if self.isCall:
                 return disc * (F * N(d1) - K * N(d2))
             return disc * (K * N(-d2) - F * N(-d1))                      # directly: parity would cancel a small put
+        if maxVol is None:
+            bound = disc * (F if self.isCall else K)                     # what the Black price tends to as the volatility grows
+            if target >= bound * (1.0 - 1e-15):
+                raise ValueError(f"the price {target} is at the upper bound {bound} of the Black price, which no finite "
+                                 "volatility reaches")
+            maxVol = 4.0
+            while black(maxVol) < target and black(2.0 * maxVol) > black(maxVol):
+                maxVol *= 2.0
         floor, cap = black(0.0), black(maxVol)
         slack = 1e-12 * max(1.0, abs(target))
         if target < floor - slack or target > cap + slack:
             raise ValueError(f"the price {target} is outside the Black range [{floor}, {cap}] for volatilities up to {maxVol}")
         if target <= floor * (1.0 + 1e-12):                              # relative to the intrinsic value: a small price
             return 0.0                                                   # above a zero floor is a small volatility, not none
+        if target >= cap:                                                # at the upper end, within the slack above
+            return maxVol
         lo = 0.0 if black(minVol) > target else minVol                   # the answer may lie below the default lower end
         return brentq(lambda v: black(v) - target, lo, maxVol, xtol=accuracy, maxiter=maxEvaluations)
 
@@ -176,7 +187,8 @@ class VanillaOption(Instrument):
             name = type(payoff).__name__
             if "CashOrNothing" in name:                       # QuantLib-Python exposes only the callable payoff
                 self.payoffType = "cash"
-                self.cash = float(payoff(2.0 * self.strike + 1.0) if self.isCall else payoff(0.0))
+                step = max(1.0, abs(self.strike))             # a point strictly in the money, whatever the strike's sign
+                self.cash = float(payoff(self.strike + step if self.isCall else self.strike - step))
             elif "AssetOrNothing" in name:
                 self.payoffType = "asset"
         elif payoff[0] in ("cash", "asset"):
@@ -285,6 +297,8 @@ class CouponBondOption(Instrument):
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
         if not all(math.isfinite(c) for _, c in self.cashflows):
             raise ValueError("cash flow amounts must be finite")
+        if any(c != 0 for _, c in self.cashflows):               # a payment of nothing is no payment, whatever its date
+            self.cashflows = [(t, c) for t, c in self.cashflows if c != 0]
         if any(c < 0 for _, c in self.cashflows):
             # the option is priced by one exercise boundary per regime, which needs a bond that falls as the rate rises
             raise ValueError("cash flow amounts must be nonnegative: with signed amounts the bond is not monotone in "

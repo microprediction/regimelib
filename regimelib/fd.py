@@ -174,6 +174,9 @@ class SwitchingFDEngine:
                        "NumericalSwitchingEngine or FastSwitchingEngine")
         if isinstance(instrument, BarrierOption):
             out = self._barrier(instrument)
+        elif instrument.maturity == 0:                                   # no grid: the automatic one has no width at T = 0
+            from .engines import payoffNow
+            out = payoffNow(self.model, instrument)
         else:
             Big, grid, u0, x0, nR = self._system(instrument, self.width)
             T = instrument.maturity

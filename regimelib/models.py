@@ -53,7 +53,7 @@ def _checkDomains(model):
     """Shared by every model, after its constructor has run: volatilities and reversion speeds are finite and
     nonnegative. A negative volatility describes the same law as its absolute value while breaking code that compares
     volatilities, and a negative reversion speed is not the model these classes document."""
-    for name in _SCALES + _SPEEDS + (("b",) if type(model).__name__ == "SwitchingG2" else ()):
+    for name in _SCALES + _SPEEDS + (("b",) if isinstance(model, SwitchingG2) else ()):
         if hasattr(model, name) and getattr(model, name) is not None:
             _nonnegative(getattr(model, name), name)
 
@@ -457,8 +457,8 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         return self.S0 * math.exp((self.r - self.q) * T)
 
     def operators(self, instrument, n, width, stretch=None):
-        """n is (nx, nv) or a single count used for both; width the half-width in log price (and v_max as a multiple
-        of max(v0, theta) is fixed at 5). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
+        """n is (nx, nv) or a single count used for both; width the half-width in log price (v_max is five times
+        max(v0, theta), or five standard deviations of v_T above it if that is more). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
         + xi_bar^2 v/2 d_vv + rho xi_bar v d_xv - r; the switched forcings are xi^2 on v d_vv / 2 and xi on rho v d_xv."""
         from .firstorder import Grid2D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
@@ -466,7 +466,10 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
         # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
-        vmax = max(5 * vtop, vtop + 5 * math.sqrt(self.theta * xi2bar / (2 * self.kappa))) if self.kappa > 0 else 5 * vtop
+        # and from v0 it spreads on the way: Var v_T = v0 xi^2 (e^{-kappa T} - e^{-2 kappa T}) / kappa + the stationary part
+        k = self.kappa; onTheWay = (math.exp(-k * T) - math.exp(-2 * k * T)) / k if k > 0 else T
+        spread = math.sqrt(self.v0 * xi2bar * onTheWay + (self.theta * xi2bar / (2 * k) if k > 0 else 0.0))
+        vmax = max(5 * vtop, vtop + 5 * spread)
         x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2

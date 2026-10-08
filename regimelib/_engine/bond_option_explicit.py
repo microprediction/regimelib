@@ -127,6 +127,10 @@ def call(kappa, th, sig, x0, T, S, K, lam, start=0, order=1):
         # expiry falls to the holding time
         raise ValueError(f"the closed form is the outer expansion, for an expiry of at least five holding times "
                          f"(T lam >= 5); here T lam = {T * lam:.3g}. Use the engines.")
+    if not any(s != 0 for s in sig):
+        # the formula integrates against the Gaussian density of x_T, and with no diffusion there is none
+        raise ValueError("the closed form needs a positive volatility in some regime: with none the rate at expiry "
+                         "has no density. Use the engines.")
     p = pieces(kappa, th, sig, x0, T, S, lam)
     eps = p['eps'] if order else 0.0
     sign = 1 if start == 0 else -1

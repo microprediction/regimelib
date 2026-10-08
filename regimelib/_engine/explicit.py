@@ -109,4 +109,5 @@ def two_state_constant_exact(gbar, gt, lam, t, sign=+1):
         shc = cmath.sinh(z) / z if z else 1.0                # sinh(s t) / (s t)
         return cmath.exp((gbar - lam) * t) * (cmath.cosh(z) + b * t * shc)
     p = b / s
-    return 0.5 * (1 + p) * cmath.exp((gbar - lam + s) * t) + 0.5 * (1 - p) * cmath.exp((gbar - lam - s) * t)
+    lead = gt * gt / (s + lam)                               # s - lam without the cancellation that loses it when lam >> |gt|
+    return 0.5 * (1 + p) * cmath.exp((gbar + lead) * t) + 0.5 * (1 - p) * cmath.exp((gbar - lam - s) * t)
