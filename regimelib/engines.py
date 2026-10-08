@@ -136,7 +136,11 @@ class SwitchingEngine:
             m = self.model; z = u - 0.5j
             g, gfuncs, pre = m.returnForcing(z, T)
             before = self._diagnosticsNow()
-            avec, dvec = self._aVector(g, gfuncs, T)
+            self._node = abs(u)                                          # the frequency, for an engine that keeps track
+            try:
+                avec, dvec = self._aVector(g, gfuncs, T)
+            finally:
+                self._node = None
             hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None, self._diagnosticsSince(before))
             if len(self._memo) > 20000:
                 self._memo.clear()
@@ -615,8 +619,15 @@ class FastSwitchingEngine(SwitchingEngine):
         # difference of two solutions near one, which loses it: solve instead
         rare = a0 is not None and abs(self._pi @ np.asarray(a0)) < 1e-6 * np.max(np.abs(a0))
         base = np.ones(self.model.n, complex); later = None
+        # the series diverges where the forcing is large, which for a transform is above some frequency. Once three
+        # nodes in a row have diverged at a maturity, the nodes above them are solved without trying the series first
+        u = getattr(self, "_node", None) if a0 is None and fallback else None
+        cuts = self._diag.setdefault("cuts", {})
+        above = u is not None and T in cuts and u >= cuts[T][0]
         with np.errstate(all="ignore"):
             try:
+                if above:
+                    base = base * cuts[T][1]; raise ValueError
                 if rare or any(getattr(gi, "unresolved", 0.0) > 1e-9 for gi in g):   # or a forcing its series misses
                     raise ValueError
                 fs = FastSwitch(Q, g, order=N + 1, a0=a0)
@@ -656,9 +667,19 @@ class FastSwitchingEngine(SwitchingEngine):
                 self._diag["numericalWeight"] = max(self._diag["numericalWeight"], float(abs(base[i])))
             if not fallback:
                 return None, None                                        # the caller solves all of its nodes numerically
-            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0); later = None
+            if u is not None and not above:
+                run = self._diag.get("run", (None, 0)); count = run[1] + 1 if run[0] == T else 1
+                self._diag["run"] = (T, count)
+                if count >= 3:
+                    cuts[T] = (u, float(abs(base[i])))
+            # what the node adds to the price is its transform times the error, so a node whose transform is small is
+            # solved to a looser relative tolerance, never looser than 1e-8
+            rtol = min(1e-8, self.rtol / max(float(abs(base[i])), 1e-300)) if a0 is None else self.rtol
+            avec = _numericalAVector(Q, g, gfuncs, T, max(rtol, self.rtol), a0); later = None
         elif matters:
             self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
+        if not diverging and u is not None:
+            self._diag["run"] = (T, 0)
         gT = np.array([gi.value(T) for gi in g], complex)
         # da/dT = (Q + diag g) a holds for the solution, and Q is of the size of 1 / epsilon: applied to a truncation
         # it loses an order (all of it at order zero, where Q 1 = 0). At order zero the derivative is the averaged

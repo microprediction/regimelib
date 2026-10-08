@@ -8,6 +8,10 @@ on:
 jobs:
   test:
     runs-on: ubuntu-latest
+    env:
+      # one BLAS thread per test worker: the matrices are small, and threads times workers oversubscribes the runner
+      OMP_NUM_THREADS: "1"
+      OPENBLAS_NUM_THREADS: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
@@ -15,8 +19,8 @@ jobs:
       - run: pip install -e . pytest pytest-xdist QuantLib
       # a pull request runs the tests not marked slow; main and the nightly run the whole suite
       - if: github.event_name == 'pull_request'
-        run: python -m pytest -q -n auto -m "not slow" tests
+        run: python -m pytest -q -n auto -m "not slow" --durations=25 tests
         timeout-minutes: 30
       - if: github.event_name != 'pull_request'
-        run: python -m pytest -q -n auto tests
+        run: python -m pytest -q -n auto --durations=25 tests
         timeout-minutes: 90
