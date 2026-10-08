@@ -218,3 +218,25 @@ def test_cir_bond_under_a_change_of_time_unit():
         assert price(c) == pytest.approx(0.93506311024783, rel=1e-10)
     with pytest.raises(ValueError, match="underflows"):
         price(1e-162)
+
+
+def test_two_state_exact_keeps_a_rare_transition():
+    from regimelib._engine.explicit import two_state_constant_exact
+    for lam in (1e-12, 1e-16, 1e-18):                        # a(t) = lam e^{-lam t} + e^{-(1 + lam) t} + O(lam^2)
+        assert two_state_constant_exact(-0.5, -0.5, lam, 100.0, sign=+1).real == pytest.approx(lam, rel=1e-9)
+    from scipy.linalg import expm
+    for gbar, gt, lam, t in ((0.3 - 0.2j, 0.7 + 0.1j, 2.0, 1.5), (-1.0, 0.01j, 50.0, 3.0)):
+        M = np.array([[gbar + gt - lam, lam], [lam, gbar - gt - lam]]); reference = expm(M * t) @ np.ones(2)
+        for sign, k in ((+1, 0), (-1, 1)):
+            assert two_state_constant_exact(gbar, gt, lam, t, sign=sign) == pytest.approx(reference[k], rel=1e-11)
+
+
+def test_g2_convexity_beyond_the_floating_range_is_refused():
+    wild = rl.SwitchingG2(CHAIN, 0.03, 0.03, 0.50, 0.05, 0.50, 0.0)       # the fitted curve is e^{-1025} times e^{1025}
+    for instrument in (rl.ZeroCouponBond(30.0), rl.ZeroCouponBondOption("call", 0.5, 5.0, 30.0)):
+        instrument.setPricingEngine(rl.NumericalSwitchingEngine(wild))
+        with pytest.raises(ArithmeticError, match="convexity"):
+            instrument.NPV()
+    plain = rl.SwitchingG2(CHAIN, 0.03, 0.03, 0.02, 0.05, 0.02, 0.0)
+    bond = rl.ZeroCouponBond(30.0); bond.setPricingEngine(rl.NumericalSwitchingEngine(plain))
+    assert bond.NPV() == pytest.approx(math.exp(-0.9), abs=1e-10)

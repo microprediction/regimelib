@@ -34,6 +34,16 @@ def _lastDecision(instrument):
     return max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
 
 
+def _convexity(x):
+    """exp(-x) for the Gaussian convexity term x = (integrated variance) / 2 of a curve-fitted model. The fitted
+    curve is this factor times its reciprocal from the reduced system, so once either leaves the floating range the
+    finite product is lost."""
+    if not abs(x) < 650.0:
+        raise ArithmeticError(f"the Gaussian convexity term is e^{x:.0f}, beyond the floating-point range: rate "
+                              "volatilities this large over this horizon are not priced")
+    return math.exp(-x)
+
+
 def _check(values, name, ok, requirement):
     """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
     for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
@@ -331,7 +341,7 @@ class SwitchingHullWhite(SwitchingModel):
         B, Bf = _m.loading(a, 0.0, T)                              # a Chebyshev series when a T is small, B = t at a = 0
         g = [(B * B).scale(0.5 * s * s) for s in self.sigma]
         gfuncs = [(lambda s: (lambda t: 0.5 * s * s * Bf(t) ** 2))(s) for s in self.sigma]
-        pre = lambda t: self.discount(t) * math.exp(-self._intShift(t))
+        pre = lambda t: self.discount(t) * _convexity(self._intShift(t))
         return g, gfuncs, pre
 
     def _intShift(self, t):
@@ -341,7 +351,7 @@ class SwitchingHullWhite(SwitchingModel):
 
     def deterministicDiscount(self, t1, t2):
         """exp(-int_{t1}^{t2} phi), the discounting carried by the fitted drift rather than by the factor x."""
-        return self.discount(t2) / self.discount(t1) * math.exp(-(self._intShift(t2) - self._intShift(t1)))
+        return self.discount(t2) / self.discount(t1) * _convexity(self._intShift(t2)) / _convexity(self._intShift(t1))
 
     def operators(self, instrument, n, width, stretch=None):
         """Grid in the zero-mean factor x (r = x + phi(t)); L_i = -a x d_x + sigma_i^2 / 2 d_xx - x, the phi part of the
@@ -400,7 +410,7 @@ class SwitchingG2(SwitchingModel):
         gfuncs = [(lambda s, e, r: (lambda t: 0.5 * s * s * fx(t) ** 2 + 0.5 * e * e * fy(t) ** 2 + r * s * e * fx(t) * fy(t)))(
             self.sigma[i], self.eta[i], self.rho[i]) for i in range(self.n)]
         # phi absorbs the averaged variance term so that the averaged model reproduces the curve: P = D(t) e^{-int cov_bar} a
-        pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
+        pre = lambda t: self.discount(t) * _convexity(cov_bar.integral(t))
         return g, gfuncs, pre
 
     def deterministicDiscount(self, t1, t2):
