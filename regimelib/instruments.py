@@ -257,6 +257,8 @@ class CouponBond(Instrument):
             cashflows = [(t, faceAmount * couponRate * (t - (ts[i - 1] if i else 0.0))) for i, t in enumerate(ts)]
             cashflows[-1] = (ts[-1], cashflows[-1][1] + faceAmount)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
+        if not all(math.isfinite(c) for _, c in self.cashflows):
+            raise ValueError("cash flow amounts must be finite")
         self.maturity = max(t for t, _ in self.cashflows)
 
 
@@ -278,6 +280,12 @@ class CouponBondOption(Instrument):
         self.isCall = _choice(kind, ("call", "put"), "kind") == "call"; self.strike = float(strike)
         self.maturity = _years(maturity, dayCounter)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
+        if not all(math.isfinite(c) for _, c in self.cashflows):
+            raise ValueError("cash flow amounts must be finite")
+        if any(c < 0 for _, c in self.cashflows):
+            # the option is priced by one exercise boundary per regime, which needs a bond that falls as the rate rises
+            raise ValueError("cash flow amounts must be nonnegative: with signed amounts the bond is not monotone in "
+                             "the rate and the exercise region is not one interval")
         if min(t for t, _ in self.cashflows) <= self.maturity:
             raise ValueError("all cash flows must fall after the option expiry")
 

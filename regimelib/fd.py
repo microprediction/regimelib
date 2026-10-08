@@ -214,7 +214,8 @@ class SwitchingFDEngine:
         # a knock-out pays its rebate at the hit; a knock-in is the vanilla less the knock-out with no rebate, plus its
         # own rebate, paid at expiry if the barrier was never touched
         atHit = opt.rebate if opt.isKnockOut else 0.0
-        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, atHit))
+        vOut = self._march(BigB, np.tile(u0B, nR), T, project=np.tile(u0B, nR) if opt.isAmerican else None, fixed=(idx, atHit),
+                           window=T - getattr(opt, "earliestExercise", 0.0) if opt.isAmerican else None)
         res = self._greeks(gridB, vOut, x0, BigB, nR)
         if opt.isKnockOut:
             return res

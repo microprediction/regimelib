@@ -289,7 +289,7 @@ class SwitchingEngine:
                 return {"value": value}
             side = 1.0 if call else -1.0                                 # delta is one-sided; at the strike it is the midpoint
             inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
-            theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else 0.0) * K)
+            theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else m.rates.r0) * K)
             return dict({"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}, **novega)
         if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
             if isinstance(m, SwitchingEquityRates):
@@ -450,7 +450,7 @@ class SwitchingEngine:
             e = cmath.exp(1j * u * k) * phiY(z) * cmath.exp(-1j * z * lf)
             I0 += w * e.real / (u * u + 0.25)
         disc = math.exp(-m.r * T)
-        call = disc * (FG - math.sqrt(FG * K) / math.pi * I0)
+        call = disc * (FG - math.sqrt(FG) * math.sqrt(K) / math.pi * I0)     # not sqrt(FG K), which can overflow
         floor = disc * (FG - K)
         return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 

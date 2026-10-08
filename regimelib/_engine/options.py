@@ -4,7 +4,7 @@ import math
 import cmath
 import numpy as np
 from .fastswitch import FastSwitch, numerical_a_callable, _finished
-from .models import vasicek_terminal, stable_B, ou_variance, refuse_hidden_variance
+from .models import vasicek_terminal, stable_B, ou_variance, int_B2, refuse_hidden_variance
 
 
 # 15-point Kronrod rule with the embedded 7-point Gauss rule (QUADPACK qk15): the Gauss nodes are every second
@@ -34,13 +34,17 @@ def _kronrod_nodes(U, panels):
     return (mid + h * x).ravel(), (h * wk).ravel(), (h * wg).ravel()
 
 
-def settled(boundaries, lo, hi, vmax, tilt, deviations=15.0):
-    """Exercise is below a boundary x*_j in the state, which given the path of the chain is Gaussian with mean in
-    [lo, hi] and variance at most vmax, under the pricing measure and (mean lowered by at most tilt vmax) under the
-    measures of the bonds delivered. A boundary more than `deviations` standard deviations above every such mean is
-    exercise with certainty (1.0), one that far below is none (0.0), to 1e-49; otherwise None, and it is integrated.
-    Without this a bond maturing just after expiry, whose boundary recedes as 1 / (S - T), asks for as many panels."""
-    reach = deviations * math.sqrt(vmax)
+def settled(boundaries, lo, hi, vmax, tilt, drift=0.0, scale=1.0):
+    """Exercise is below a boundary x*_j in the state. Given the path of the chain the state is Gaussian with mean in
+    [lo, hi] and variance at most vmax, and each term of the price is an expectation under a measure that moves that
+    mean: discounting by exp(-int r) moves it by the covariance of the state with the integrated rate, at most
+    `drift` either way, and delivery of the bond lowers it by at most tilt vmax. A boundary far enough above every
+    such mean is exercise with certainty (1.0), one far enough below is none (0.0); otherwise None, and the term is
+    integrated. Far enough is the number of standard deviations at which the Gaussian tail times `scale`, the largest
+    term, is below 1e-40: at least fifteen, and more when the terms are large. Without this a bond maturing just
+    after expiry, whose boundary recedes as 1 / (S - T), asks for as many panels."""
+    deviations = max(15.0, math.sqrt(2.0 * (math.log(max(scale, 1e-300)) + 92.2))) if scale > 0 else 15.0
+    reach = deviations * math.sqrt(vmax) + drift
     return [1.0 if x > hi + reach else 0.0 if x < lo - tilt * vmax - reach else None for x in boundaries]
 
 
@@ -99,12 +103,14 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((b, A[j]), (0.0, -K))]
     xstar = [math.log(A[j] / K) / b for j in range(m)]
     th = np.asarray(thetas, float)
-    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET),
-                   float(np.max(np.asarray(sigmas, float) ** 2)) * ou_variance(kappa, T), b)
-    price = 0.0
+    terms = []
     for j, c0, weight in cases:
         a, Bv = a_vec(T, c0, np.eye(m)[j])
-        price += weight * (0.5 if sure[j] is None else sure[j]) * (a[start] * cmath.exp(-Bv * x0)).real
+        terms.append(weight * (a[start] * cmath.exp(-Bv * x0)).real)
+    s2max = float(np.max(np.asarray(sigmas, float) ** 2)); vmax = s2max * ou_variance(kappa, T)
+    sure = settled(xstar, x0 * ET + th.min() * (1 - ET), x0 * ET + th.max() * (1 - ET), vmax, b,
+                   drift=math.sqrt(vmax * s2max * int_B2(kappa, T)), scale=max(abs(t) for t in terms))
+    price = sum(t * (0.5 if sure[j] is None else sure[j]) for t, (j, _, _) in zip(terms, cases))
     cases = [case for case in cases if sure[case[0]] is None]
     if not cases:
         return price
@@ -114,15 +120,20 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
     if chosen:
         # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
         # transform decays more slowly, so follow the transforms themselves
-        widest = 16 * U
-        while U < widest and beyond(U) > 1e-9:
+        widest = 16 * U; size = max(1.0, max(abs(t) for t in terms))     # against the terms, which a rate shift scales
+        while U < widest and beyond(U) > 1e-9 * size:
             U *= 2
-        if beyond(U) > 1e-9:
+        if beyond(U) > 1e-9 * size:
             raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
                                   "the stationary variance gives: the chain is slow against the expiry and this regime "
                                   "is far quieter than the others. Use SwitchingFDEngine for this option.")
     rate = max(abs(xs - mean_xT) for xs, known in zip(xstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    if panels is None and npan > 400:
+        # the exercise boundary is far from the state in units of the range integrated (a bond maturing just after
+        # expiry, at a strike away from par) and yet not far enough to be settled
+        raise ArithmeticError(f"the Gil-Pelaez integrals would need {npan:,} panels: the exercise boundary is "
+                              f"{rate:.3g} from the state's mean over a range of {U:.3g}. Use SwitchingFDEngine.")
     blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan)
@@ -153,5 +164,7 @@ def zcb_call(T, S, K, x0, start, kappa, thetas, sigmas, Q, order=None, U=None, t
         if err <= tol:
             return price + val
         npan *= 2
+        if npan > 800:
+            break
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} with {npan // 2} panels "
                           f"(error estimate {err:.1e})")
