@@ -29,6 +29,11 @@ def _spread(speed, T):
     return min(1.0 / (2.0 * speed), reached) if speed > 0 else reached
 
 
+def _lastDecision(instrument):
+    """The latest date at which the holder decides: the grid is marched from there, so it is sized for it."""
+    return max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
+
+
 def _check(values, name, ok, requirement):
     """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
     for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
@@ -99,7 +104,7 @@ class SwitchingVasicek(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            sd = math.sqrt(max(s2) * _spread(self.a, instrument.maturity)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            sd = math.sqrt(max(s2) * _spread(self.a, _lastDecision(instrument))); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
             grid = Grid1D(self.r0 - L, self.r0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift, Adiff = self.a * D1, 0.5 * D2
@@ -163,7 +168,7 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, instrument.maturity))
+            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, _lastDecision(instrument)))
             grid = Grid1D(0.0, top, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift = self.k * D1

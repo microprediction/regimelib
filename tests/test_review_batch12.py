@@ -198,3 +198,23 @@ def test_transition_matrix_error_says_what_was_tested():
     Q = np.array([[-5.0, 5.0, 0.0], [0.0, -9.0, 9.0], [10.0, 0.0, -10.0]])
     with pytest.raises(ValueError, match="another branch"):
         rl.RegimeChain.fromTransitionMatrix(expm(Q * 0.5), 0.5)
+
+
+def test_bermudan_rate_grid_is_sized_for_the_last_exercise():
+    lead = 1.0 / 365.0
+    exercises, payments = [lead + i for i in range(11)], [lead + i for i in range(1, 12)]
+    for model, wide in ((rl.SwitchingVasicek(CHAIN, r0=0.03, a=0.05, b=0.03, sigma=0.01), 2.10706),
+                        (rl.SwitchingCoxIngersollRoss(CHAIN, r0=0.03, theta=0.03, k=0.05, sigma=0.10), 4.32565)):
+        swaption = rl.Swaption("payer", lead, payments, fixedRate=0.04, notional=100.0, exerciseTimes=exercises)
+        swaption.setPricingEngine(rl.SwitchingFDEngine(model, n=401, steps=400))
+        assert swaption.NPV() == pytest.approx(wide, rel=5e-4)           # the default grid returned 0 and 1.196
+
+
+def test_cir_bond_under_a_change_of_time_unit():
+    def price(c):
+        model = rl.SwitchingCoxIngersollRoss(ONE, r0=c * 0.03, theta=[c * 0.04], k=c * 0.5, sigma=c * 0.1)
+        bond = rl.ZeroCouponBond(2.0 / c); bond.setPricingEngine(rl.NumericalSwitchingEngine(model)); return bond.NPV()
+    for c in (1e-150, 4e154):
+        assert price(c) == pytest.approx(0.93506311024783, rel=1e-10)
+    with pytest.raises(ValueError, match="underflows"):
+        price(1e-162)
