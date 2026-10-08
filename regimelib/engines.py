@@ -330,7 +330,13 @@ class SwitchingEngine:
             return payoffNow(m, instrument)
         if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
             if isinstance(m, SwitchingEquityRates):
-                return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T) if call else 0.0}
+                if not call:
+                    return {"value": 0.0}
+                if instrument.payoffType == "cash":                      # paid for certain: the cash times the bond
+                    return {"value": instrument.cash * self._hybridBond(T)}
+                if instrument.payoffType == "asset":
+                    return {"value": S0 * math.exp(-m.q * T)}
+                return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T)}
             dq, dr = math.exp(-m.q * T), math.exp(-m.r * T)
             if instrument.payoffType == "cash":
                 return {"value": dr * instrument.cash if call else 0.0}
@@ -343,6 +349,8 @@ class SwitchingEngine:
         if still == "deterministic":                                     # the terminal price is known: discounted payoff
             if isinstance(m, SwitchingEquityRates):                      # S_T = S0 e^{-qT} / P(0, T)
                 P = self._hybridBond(T); value = S0 * math.exp(-m.q * T) - K * P
+                if instrument.payoffType != "vanilla":
+                    return {"value": P * float(instrument.payoffOnGrid([S0 * math.exp(-m.q * T) / P])[0])}
                 return {"value": max(value, 0.0) if call else max(-value, 0.0)}
             dq, dr = math.exp(-m.q * T), math.exp(-m.r * T); F = m.forward(T)
             if instrument.payoffType != "vanilla":
