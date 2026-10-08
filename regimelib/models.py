@@ -29,6 +29,11 @@ def _spread(speed, T):
     return min(1.0 / (2.0 * speed), reached) if speed > 0 else reached
 
 
+def _lastDecision(instrument):
+    """The latest date at which the holder decides: the grid is marched from there, so it is sized for it."""
+    return max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
+
+
 def _check(values, name, ok, requirement):
     """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
     for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
@@ -53,7 +58,7 @@ def _checkDomains(model):
     """Shared by every model, after its constructor has run: volatilities and reversion speeds are finite and
     nonnegative. A negative volatility describes the same law as its absolute value while breaking code that compares
     volatilities, and a negative reversion speed is not the model these classes document."""
-    for name in _SCALES + _SPEEDS + (("b",) if type(model).__name__ == "SwitchingG2" else ()):
+    for name in _SCALES + _SPEEDS + (("b",) if isinstance(model, SwitchingG2) else ()):
         if hasattr(model, name) and getattr(model, name) is not None:
             _nonnegative(getattr(model, name), name)
 
@@ -99,7 +104,7 @@ class SwitchingVasicek(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            sd = math.sqrt(max(s2) * _spread(self.a, instrument.maturity)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            sd = math.sqrt(max(s2) * _spread(self.a, _lastDecision(instrument))); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
             grid = Grid1D(self.r0 - L, self.r0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift, Adiff = self.a * D1, 0.5 * D2
@@ -163,7 +168,7 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, instrument.maturity))
+            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, _lastDecision(instrument)))
             grid = Grid1D(0.0, top, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift = self.k * D1
@@ -457,8 +462,8 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         return self.S0 * math.exp((self.r - self.q) * T)
 
     def operators(self, instrument, n, width, stretch=None):
-        """n is (nx, nv) or a single count used for both; width the half-width in log price (and v_max as a multiple
-        of max(v0, theta) is fixed at 5). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
+        """n is (nx, nv) or a single count used for both; width the half-width in log price (v_max is five times
+        max(v0, theta), or five standard deviations of v_T above it if that is more). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
         + xi_bar^2 v/2 d_vv + rho xi_bar v d_xv - r; the switched forcings are xi^2 on v d_vv / 2 and xi on rho v d_xv."""
         from .firstorder import Grid2D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
@@ -466,7 +471,10 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
         # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
-        vmax = max(5 * vtop, vtop + 5 * math.sqrt(self.theta * xi2bar / (2 * self.kappa))) if self.kappa > 0 else 5 * vtop
+        # and from v0 it spreads on the way: Var v_T = v0 xi^2 (e^{-kappa T} - e^{-2 kappa T}) / kappa + the stationary part
+        k = self.kappa; onTheWay = (math.exp(-k * T) - math.exp(-2 * k * T)) / k if k > 0 else T
+        spread = math.sqrt(self.v0 * xi2bar * onTheWay + (self.theta * xi2bar / (2 * k) if k > 0 else 0.0))
+        vmax = max(5 * vtop, vtop + 5 * spread)
         x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2

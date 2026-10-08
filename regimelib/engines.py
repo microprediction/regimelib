@@ -46,6 +46,19 @@ def _noDiffusion(m):
     return answer
 
 
+def payoffNow(m, instrument):
+    """An equity option that expires now: its payoff at the spot, with the one-sided greeks of that payoff."""
+    K, S0 = instrument.strike, m.S0
+    value = float(instrument.payoffOnGrid([S0])[0])
+    if instrument.payoffType != "vanilla":
+        return {"value": value}
+    side = 1.0 if instrument.isCall else -1.0                            # delta is one-sided; at the strike it is the midpoint
+    inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
+    theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else m.rates.r0) * K)
+    novega = {"vega": 0.0} if hasattr(m, "v0") else {}                   # a payoff does not depend on v0
+    return dict({"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}, **novega)
+
+
 def deterministicEquity(m, instrument):
     """The value of an equity contract when the price path is known, S_t = S0 e^{(r - q) t}: the discounted payoff,
     the best exercise date for an American option, and for a barrier whether and when the path crosses it."""
@@ -173,11 +186,34 @@ class SwitchingEngine:
     def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
 
-    @byBelief()
     def calculate(self, instrument, results=False):
+        now = self._expiringUnderBelief(instrument)
+        if now is not None:
+            return now if results else now["value"]
+        return self._calculate(instrument, results)
+
+    def _expiringUnderBelief(self, instrument):
+        """An option on a bond that expires now, held with a belief about a regime the path does not reveal: the
+        holder exercises on the belief-weighted bond, so the payoff is applied after the average, not before."""
+        if (getattr(self, "belief", None) is None or self.information != "inferred" or instrument.maturity != 0
+                or not isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption))
+                or regimeIsKnown(self.model)):
+            return None
+        if isinstance(instrument, ZeroCouponBondOption):
+            isCall, K, flows = instrument.isCall, instrument.strike, [(instrument.bondMaturity, 1.0)]
+        elif isinstance(instrument, CouponBondOption):
+            isCall, K, flows = instrument.isCall, instrument.strike, instrument.cashflows
+        else:
+            isCall, K, flows = not instrument.isPayer, instrument.notional, instrument.cashflows
+        value = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in flows) - K
+        return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+
+    @byBelief()
+    def _calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
-        if (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
-                and self.information == "inferred" and not regimeIsKnown(m)):
+        hidden = (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
+                  and self.information == "inferred" and not regimeIsKnown(m))
+        if hidden and isinstance(instrument, CapFloor):
             raise notRevealed("the price of an option on a bond or a swap")   # one exercise boundary per regime below
         if isinstance(instrument, VanillaOption):                       # the transforms below are of the terminal value
             rejectFeatures(instrument, "the characteristic-function engine", ("American exercise", "a barrier"),
@@ -194,6 +230,8 @@ class SwitchingEngine:
         exact = self._exactAtTheEnds(instrument)                        # zero maturity, nonpositive strike
         if exact is not None:
             return exact if results else exact["value"]
+        if hidden:                                                      # the ends above need no exercise boundary
+            raise notRevealed("the price of an option on a bond or a swap")   # one exercise boundary per regime below
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
@@ -289,13 +327,7 @@ class SwitchingEngine:
                 return {"value": math.exp(-m.r * T) * float(instrument.payoffOnGrid([G])[0])}
             return None                                                  # a nonpositive strike is handled with the forward of the average
         if T == 0:
-            value = float(instrument.payoffOnGrid([S0])[0])
-            if instrument.payoffType != "vanilla":
-                return {"value": value}
-            side = 1.0 if call else -1.0                                 # delta is one-sided; at the strike it is the midpoint
-            inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
-            theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else m.rates.r0) * K)
-            return dict({"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}, **novega)
+            return payoffNow(m, instrument)
         if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
             if isinstance(m, SwitchingEquityRates):
                 return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T) if call else 0.0}
@@ -404,7 +436,7 @@ class SwitchingEngine:
         if q > 1.0 + 1e-12:
             warnings.warn(f"the survival probability to t = {t:g} is {q:.6g}, above one: a Gaussian (Vasicek) intensity is "
                           "negative with positive probability, and at these parameters that matters. Use a "
-                          "Cox-Ingersoll-Ross intensity or a lower volatility.", IntensityWarning, stacklevel=4)
+                          "Cox-Ingersoll-Ross intensity or a lower volatility.", IntensityWarning, stacklevel=5)
         return q
 
     def _hybridVanilla(self, opt):
@@ -740,8 +772,14 @@ class FastSwitchingEngine(SwitchingEngine):
         d["numericalNodes"] += contribution["numericalNodes"]; d["nodes"] += contribution["nodes"]
         d["numericalWeight"] = max(d["numericalWeight"], contribution["numericalWeight"])
 
-    @byBelief(worst=("orderUsed", "lastIncrement"))
     def calculate(self, instrument, results=False):
+        now = None if getattr(self, "_inside", False) else self._expiringUnderBelief(instrument)
+        if now is not None:                                             # prices the bonds, each a calculation of its own
+            return now if results else now["value"]
+        return self._calculateFast(instrument, results)
+
+    @byBelief(worst=("orderUsed", "lastIncrement"))
+    def _calculateFast(self, instrument, results=False):
         if getattr(self, "_inside", False):
             # a bond inside a swap, a cap or a parity relation: part of the instrument being priced, at its order, with
             # its diagnostics and its one set of warnings
@@ -761,15 +799,15 @@ class FastSwitchingEngine(SwitchingEngine):
             warnings.warn(f"the fast-switching expansion is not converging at order {self.orderUsed}: the last term "
                           f"({d['lastTermRelative']:.1e} of the value) is not smaller than the one before it; the holding "
                           f"time is {eps:.3g}. Use NumericalSwitchingEngine, or order=None to stop at the best truncation.",
-                          ExpansionWarning, stacklevel=3)
+                          ExpansionWarning, stacklevel=4)
         elif d["lastTermRelative"] > 1e-3:
             warnings.warn(f"the fast-switching expansion at order {self.orderUsed} is rough: the last term is "
                           f"{d['lastTermRelative']:.1e} of the value (holding time {eps:.3g}). Raise the order or use "
-                          "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=3)
+                          "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=4)
         if self._diag["numericalNodes"] and self._diag["numericalWeight"] > 1e-8:
             warnings.warn(f"the expansion diverged at {self._diag['numericalNodes']} Fourier nodes (large forcing at high "
                           f"frequency, the largest with characteristic function {self._diag['numericalWeight']:.1e}), where "
-                          "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=3)
+                          "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=4)
         return out if results else out["value"]
 
     @staticmethod

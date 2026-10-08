@@ -86,10 +86,14 @@ class MonteCarloSwitchingEngine:
                 return {"cash": disc * (instrument.cash or 0.0), "asset": disc * F}.get(instrument.payoffType, disc * (F - K))
             sign = 1.0 if instrument.isCall else -1.0
             for states, durs in self._paths(T):
-                v = float(np.sum(np.asarray(m.sigma)[states] ** 2 * durs))      # integrated variance given the path
-                if v == 0.0:                                                    # the path never left a zero-volatility regime
+                vols = np.asarray(m.sigma, float)[states]; top = float(vols.max()) if len(vols) else 0.0
+                if top == 0.0:                                                  # the path never left a zero-volatility regime
                     vals.append(disc * float(instrument.payoffOnGrid([F])[0])); continue
-                sv = math.sqrt(v); d1 = (math.log(F / K) + 0.5 * v) / sv; d2 = d1 - sv
+                # the deviation given the path, scaled by its largest volatility so that a small one does not square to zero
+                sv = top * math.sqrt(float(np.sum((vols / top) ** 2 * durs))); v = sv * sv
+                if sv == 0.0:
+                    vals.append(disc * float(instrument.payoffOnGrid([F])[0])); continue
+                d1 = (math.log(F / K) + 0.5 * v) / sv; d2 = d1 - sv
                 if instrument.payoffType == "cash":                             # pays the cash amount beyond the strike
                     vals.append(disc * instrument.cash * _N(sign * d2))
                 elif instrument.payoffType == "asset":                          # pays the asset beyond the strike

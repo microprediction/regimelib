@@ -18,12 +18,17 @@ def _gth(Q):
     nonnegative numbers, so no cancellation whatever the spread of the rates."""
     A = np.array(Q, float); n = A.shape[0]
     for k in range(n - 1, 0, -1):
-        A[:k, k] /= A[k, :k].sum()
+        with np.errstate(over="ignore", invalid="ignore"):
+            A[:k, k] /= A[k, :k].sum()
         A[:k, :k] += np.outer(A[:k, k], A[k, :k])
     pi = np.zeros(n); pi[0] = 1.0
     for k in range(1, n):
         pi[k] = pi[:k] @ A[:k, k]
-    return pi / pi.sum()
+    total = pi.sum()
+    if not np.isfinite(total):
+        raise ArithmeticError("the stationary law could not be computed: the switching rates span more than the "
+                              "floating-point range, so a ratio of them overflows")
+    return pi / total
 
 
 class RegimeChain:
@@ -100,8 +105,10 @@ class RegimeChain:
     def fromTransitionMatrix(P, dt):
         """The chain whose transition matrix over a step dt is P, for a matrix estimated at a data frequency (rows
         are the regime now and sum to one). Not every transition matrix comes from a continuous-time chain: for two
-        regimes it does exactly when p11 + p22 > 1, and in general when its principal logarithm is a generator. A
-        matrix that does not is refused; how to move it to one that does is a modelling choice left to the caller."""
+        regimes it does exactly when p11 + p22 > 1. This method takes the principal logarithm and requires it to
+        be a generator; with three or more regimes a matrix can come from a chain through another branch of the
+        logarithm (rates that cycle fast against dt), which is not searched for. A matrix that fails the test is
+        refused; how to move it to one that does is a modelling choice left to the caller."""
         from scipy.linalg import logm, expm
         P = np.array(P, dtype=float)
         if P.ndim != 2 or P.shape[0] != P.shape[1] or P.shape[0] == 0:
@@ -125,8 +132,10 @@ class RegimeChain:
         scale = max(np.abs(Q).max(), 1e-300)
         if (not np.all(np.isfinite(L)) or np.abs(np.imag(L)).max() > 1e-9 * scale * dt
                 or off.min() < -1e-9 * scale):
-            raise ValueError("no continuous-time chain has this transition matrix: its principal logarithm is not a "
-                             "generator (an off-diagonal rate would be negative or complex)")
+            raise ValueError("the principal logarithm of this transition matrix is not a generator (an off-diagonal "
+                             "rate would be negative or complex). With two regimes no continuous-time chain has it; "
+                             "with more, another branch of the logarithm may be a generator, and this method does not "
+                             "search for one: pass the generator to RegimeChain directly if it is known")
         off = np.maximum(off, 0.0)
         Q = off - np.diag(off.sum(axis=1))
         if np.abs(expm(Q * dt) - P).max() > 1e-8:

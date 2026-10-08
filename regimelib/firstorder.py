@@ -129,7 +129,20 @@ class FirstOrderFDEngine:
                              f"{len(model.chain.closedClasses())} closed classes. Use SwitchingFDReferee.")
         self.regime, self.belief = startingBelief(regime, model.n)
         self.averaged = self.correction = self.memory = None
-        self.warnAbove = warnAbove; self.diagnostics = {}
+        self.warnAbove = warnAbove
+
+    @property
+    def diagnostics(self):
+        """Sizes of the two first-order terms against the averaged value, from the components as they stand: for a
+        starting belief those are the belief-weighted ones, so the diagnostics do not depend on how regimes are labelled."""
+        if self.averaged is None:
+            return {}
+        scale = max(abs(self.averaged), 1e-300)
+        d = dict(holdingTime=self.model.chain.meanHoldingTime(), correctionRelative=float(abs(self.correction) / scale),
+                 memoryRelative=float(abs(self.memory) / scale))
+        rel = d["correctionRelative"] + d["memoryRelative"]
+        d["estimatedError"] = rel * rel                               # the neglected second-order term, checked against the referee
+        return d
 
     @byBelief(mean=("averaged", "correction", "memory"))
     def calculate(self, instrument):
@@ -137,10 +150,10 @@ class FirstOrderFDEngine:
             raise TypeError("the first-order finite-difference engine prices vanilla options")
         rejectFeatures(instrument, "the first-order finite-difference engine", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
-        from .engines import _noDiffusion, deterministicEquity
-        if _noDiffusion(m) == "deterministic":                           # no grid to build: the terminal price is known
-            self.averaged, self.correction, self.memory = deterministicEquity(m, instrument), 0.0, 0.0
-            self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=0.0, memoryRelative=0.0, estimatedError=0.0)
+        from .engines import _noDiffusion, deterministicEquity, payoffNow
+        if T == 0 or _noDiffusion(m) == "deterministic":                 # no grid to build: the terminal price is known
+            now = payoffNow(m, instrument)["value"] if T == 0 else deterministicEquity(m, instrument)
+            self.averaged, self.correction, self.memory = now, 0.0, 0.0
             return self.averaged
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         K, M = green_kubo(m.chain, f)
@@ -154,11 +167,7 @@ class FirstOrderFDEngine:
         layer = expm(np.asarray(m.chain.generator) * T) @ M.T               # column j: e^{QT} M_j
         mem = sum(-(M[j, self.regime] - layer[self.regime, j]) * (As[j] @ ubar) for j in range(len(As)))
         self.averaged, self.correction, self.memory = grid.interp(ubar, x0), grid.interp(u1, x0), grid.interp(mem, x0)
-        scale = max(abs(self.averaged), 1e-300)
-        self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=abs(self.correction) / scale,
-                                memoryRelative=abs(self.memory) / scale)
         rel = self.diagnostics["correctionRelative"] + self.diagnostics["memoryRelative"]
-        self.diagnostics["estimatedError"] = rel * rel               # the neglected second-order term, checked against the referee
         if rel > self.warnAbove:
             from .engines import ExpansionWarning
             warnings.warn(f"the first-order correction is {rel:.1e} of the averaged value (holding time "
@@ -179,7 +188,9 @@ class SwitchingFDReferee:
             raise TypeError("the switching finite-difference referee prices vanilla options")
         rejectFeatures(instrument, "the switching finite-difference referee", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
-        from .engines import _noDiffusion, deterministicEquity
+        from .engines import _noDiffusion, deterministicEquity, payoffNow
+        if T == 0:
+            return payoffNow(m, instrument)["value"]
         if _noDiffusion(m) == "deterministic":
             return deterministicEquity(m, instrument)
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)

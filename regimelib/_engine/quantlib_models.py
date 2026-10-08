@@ -37,11 +37,21 @@ def merton76(u, sigmas, lams, mu_j, sig_j):
     return [ExpSum({0: c}) for c in cs], [(lambda c: (lambda t: c))(c) for c in cs]
 
 
+def _log1p(z):
+    """log(1 + z) for complex z, by its series where forming 1 + z would lose z."""
+    if abs(z) > 1e-2:
+        return cmath.log(1 + z)
+    total, term = 0.0, -1.0
+    for n in range(1, 12):
+        term *= -z; total += term / n
+    return total
+
+
 def variance_gamma(u, sigmas, nus, thetas):
     """Variance gamma (QuantLib VarianceGammaProcess), all three parameters switched, martingale-corrected drift."""
     cs = []
     for s, nu, th in zip(sigmas, nus, thetas):
-        psi = lambda z: -cmath.log(1 - 1j * th * nu * z + 0.5 * s * s * nu * z * z) / nu
+        psi = lambda z: -_log1p(nu * (-1j * th * z + 0.5 * s * s * z * z)) / nu
         omega = -psi(-1j)                     # makes E[exp(X)] = 1
         cs.append(psi(u) + 1j * u * omega)
     return [ExpSum({0: c}) for c in cs], [(lambda c: (lambda t: c))(c) for c in cs]

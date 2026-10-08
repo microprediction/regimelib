@@ -25,8 +25,8 @@ def test_domains_by_parameter_and_model():
     g2 = rl.SwitchingG2(CHAIN, 0.03, 0.5, 0.01, 0.1, 0.01, -0.5)
     assert defaultBounds(heston, "rho") == (-1.0, 1.0)
     assert defaultBounds(heston, "theta") == (0.0, np.inf) and defaultBounds(gamma, "theta") == (-np.inf, np.inf)
-    assert defaultBounds(vasicek, "b") == (-np.inf, np.inf) and defaultBounds(g2, "b")[0] > 0
-    assert defaultBounds(heston, "sigma") == (0.0, np.inf) and defaultBounds(heston, "kappa")[0] > 0
+    assert defaultBounds(vasicek, "b") == (-np.inf, np.inf) and defaultBounds(g2, "b") == (0.0, np.inf)
+    assert defaultBounds(heston, "sigma") == (0.0, np.inf) and defaultBounds(heston, "kappa") == (0.0, np.inf)
     assert defaultBounds(heston, "r") == (-np.inf, np.inf) and defaultBounds(heston, "chain") == (0.0, np.inf)
 
 

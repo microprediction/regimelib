@@ -60,7 +60,14 @@ def loadings(specs, T):
     series for all of them if kappa T is small for any, exponential sums otherwise."""
     fs = [(lambda k, c: (lambda t: stable_B(k, t, c)))(k, c) for k, c in specs]
     if T is not None and any(abs(k) * T < SMALL_SPEED for k, _ in specs):
-        return [(Cheb.fit(f, T, 24), f) for f in fs]
+        for degree in (24, 48, 96, 192):                     # a fast factor beside the slow one has a layer of width 1 / k
+            fits = [Cheb.fit(f, T, degree) for f in fs]
+            if max(c.unresolved for c in fits) < 1e-10:
+                return list(zip(fits, fs))
+        raise NotImplementedError(
+            "one factor has almost no reversion and another reverts so fast that its loading is not resolved over "
+            f"this horizon (speeds {[k for k, _ in specs]}, T = {T}); this pair is not priced by the transform "
+            "engines. Use SwitchingFDEngine.")
     return [(ExpSum({0: 1 / k, k: c - 1 / k}), f) for (k, c), f in zip(specs, fs)]
 
 
@@ -106,7 +113,7 @@ def cir_B(kappa, sigma, t):
     """The CIR loading 2 (e^{ht} - 1) / ((h + kappa)(e^{ht} - 1) + 2h), h = sqrt(kappa^2 + 2 sigma^2), written in
     d = 1 - e^{-ht} so that it neither overflows at large h t nor subtracts near-equal numbers at small h t; B = t
     at h = 0."""
-    h = math.sqrt(kappa ** 2 + 2 * sigma ** 2)
+    h = math.hypot(kappa, math.sqrt(2.0) * sigma)            # without squaring: a change of time unit scales both
     if h == 0.0:
         return t
     d = -math.expm1(-h * t)
@@ -116,8 +123,10 @@ def cir_B(kappa, sigma, t):
 def cir_switching_mean(kappa, thetas, sigma, T):
     """dx = kappa (theta[y] - x) dt + sigma sqrt(x) dW. B solves B' = 1 - kappa B - sigma^2 B^2 / 2, B(0) = 0,
     independent of the regime, so u_i = exp(-B x) a_i with g_i = -kappa theta_i B."""
-    h = math.sqrt(kappa ** 2 + 2 * sigma ** 2)
-
+    if any(kappa > 0 and th > 0 and kappa * th == 0.0 for th in thetas):
+        # in a time unit so long that kappa theta underflows the drift would be dropped without a word
+        raise ValueError(f"kappa theta underflows (kappa = {kappa}, theta = {list(thetas)}): the drift of the rate "
+                         "cannot be represented in this time unit. Rescale time.")
     B = lambda t: cir_B(kappa, sigma, t)
     gfuncs = [(lambda th: (lambda t: -kappa * th * B(t)))(th) for th in thetas]
     Bc = Cheb.fit(B, T, 80)
@@ -157,7 +166,10 @@ def heston_switching_theta(u, kappa, thetas, xi, rho, T):
         d = cmath.sqrt((rho * xi * 1j * u - kappa) ** 2 + xi ** 2 * (1j * u + u * u))
         if kappa - rho * xi * 1j * u + d == 0:    # at u = -i with rho xi > kappa: the other root, for which D = 0 there
             d = -d
-        gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
+        if kappa - rho * xi * 1j * u + d == 0:    # both vanish (kappa = 0 at u = 0, say): D' = xi^2 D^2 / 2 from zero,
+            gm = 0.0                              # so D = 0, which the expression below gives with any finite ratio
+        else:
+            gm = (kappa - rho * xi * 1j * u - d) / (kappa - rho * xi * 1j * u + d)
 
     def D(t):
         if xi == 0.0:                         # no vol-of-vol: the Riccati equation is linear, D' = -kappa D - (u^2 + iu)/2
