@@ -136,7 +136,9 @@ Protection on a unit notional with the premium ``spread`` paid at ``times``, rec
 bond price is the survival probability (``SwitchingVasicek``, ``SwitchingCoxIngersollRoss``, ``SwitchingVasicekJumps``
 used as intensities). ``discount`` is a flat risk-free rate or a callable ``t -> discount factor``. Protection is
 valued at the mid-point of each accrual period, as QuantLib's ``MidPointCdsEngine``. ``fairSpread()``,
-``couponLegNPV()`` and ``defaultLegNPV()`` are available after ``NPV()``.
+``couponLegNPV()`` and ``defaultLegNPV()`` are available after ``NPV()``. With a callable curve every
+accessor prices again: the curve behind a callable (a relinked QuantLib handle, say) can change without the
+callable changing, so no result is kept. The same holds for a model built on a term structure or a callable.
 
 .. code-block:: python
 

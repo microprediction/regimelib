@@ -322,7 +322,8 @@ class SwitchingHullWhite(SwitchingModel):
         super().__init__(chain)
         self.a = float(a); self.sigma = _per_regime(sigma, self.n, "sigma")
         if np.isscalar(termStructure):
-            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+            from .instruments import FlatCurve
+            self.discount = FlatCurve(termStructure)
         elif hasattr(termStructure, "discount"):
             ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
         else:
@@ -393,7 +394,8 @@ class SwitchingG2(SwitchingModel):
         self.sigma, self.eta, self.rho = _per_regime(sigma, self.n, "sigma"), _per_regime(eta, self.n, "eta"), _per_regime(rho, self.n, "rho")
         _correlation(self.rho)
         if np.isscalar(termStructure):
-            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+            from .instruments import FlatCurve
+            self.discount = FlatCurve(termStructure)
         elif hasattr(termStructure, "discount"):
             ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
         else:

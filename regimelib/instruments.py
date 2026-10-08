@@ -52,6 +52,16 @@ def _schedule(times, name, after=None, minimum=1):
     return times
 
 
+class FlatCurve:
+    """The discount curve e^{-rate t}. A curve given as a number is held as one of these, so that it is compared by
+    its rate; a curve given as a function or a term structure can change behind an unchanged object."""
+    def __init__(self, rate):
+        self.rate = float(rate)
+
+    def __call__(self, t):
+        return math.exp(-self.rate * t)
+
+
 def _stateOf(obj, depth=0):
     """A comparable snapshot of the numbers an object holds: its own attributes and, to a few levels, those of the
     objects it refers to (engine -> model -> chain). Caches and results (names starting with an underscore) are left
@@ -64,13 +74,16 @@ def _stateOf(obj, depth=0):
         return tuple(_stateOf(v, depth) for v in obj)
     if isinstance(obj, dict):
         return tuple((k, _stateOf(v, depth)) for k, v in sorted(obj.items()))
-    if callable(obj) and hasattr(obj, "__dict__") and not vars(obj):
-        # a plain function (a discount curve) holds no numbers to compare, so it is itself: another one is a change
-        return ("callable", id(obj))
+    if callable(obj) and not isinstance(obj, FlatCurve):
+        # a function or a bound method (a discount curve): what it returns can change while it stays the same object
+        # (a relinked QuantLib handle), and nothing here can see that, so it never compares equal and nothing that
+        # depends on it is reused
+        return object()
     if hasattr(obj, "__dict__") and depth < 4:
         skip = ("averaged", "correction", "memory", "diagnostics", "orderUsed", "lastIncrement", "standardError")
         return (type(obj).__name__,) + tuple((k, _stateOf(v, depth + 1)) for k, v in sorted(vars(obj).items())
-                                             if not k.startswith("_") and k not in skip)
+                                             if not k.startswith("_") and k not in skip
+                                             and not (callable(v) and callable(getattr(type(obj), k, None))))  # a wrapped method
     return id(obj)                                                       # a callable (a discount curve): identity
 
 
@@ -360,7 +373,7 @@ class CreditDefaultSwap(Instrument):
         if not math.isfinite(self.recovery) or not 0.0 <= self.recovery <= 1.0:
             raise ValueError(f"recovery must be finite and lie in [0, 1], got {self.recovery}")
         self.times = _schedule([_years(t, dayCounter) for t in times], "the premium times", after=0.0)
-        self.discount = discount if callable(discount) else (lambda t, r=float(discount): math.exp(-r * t))
+        self.discount = discount if callable(discount) else FlatCurve(discount)
         self.accrualOnDefault = accrualOnDefault
         self.maturity = self.times[-1]
 

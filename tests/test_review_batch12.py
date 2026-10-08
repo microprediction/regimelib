@@ -240,3 +240,40 @@ def test_g2_convexity_beyond_the_floating_range_is_refused():
     plain = rl.SwitchingG2(CHAIN, 0.03, 0.03, 0.02, 0.05, 0.02, 0.0)
     bond = rl.ZeroCouponBond(30.0); bond.setPricingEngine(rl.NumericalSwitchingEngine(plain))
     assert bond.NPV() == pytest.approx(math.exp(-0.9), abs=1e-10)
+
+
+def test_hybrid_digitals_at_the_ends_are_digitals():
+    T = 1.0
+
+    def value(option, engine):
+        option.setPricingEngine(engine); return option.NPV()
+    equity = rl.SwitchingBlackScholesProcess(CHAIN, S0=100.0, r=0.0, q=0.01, sigma=[0.30, 0.15])
+    rates = rl.SwitchingVasicek(CHAIN, r0=0.03, a=0.5, b=[0.06, 0.02], sigma=[0.015, 0.008])
+    engine = rl.NumericalSwitchingEngine(rl.SwitchingEquityRates(equity, rates))
+    P = value(rl.ZeroCouponBond(T), rl.NumericalSwitchingEngine(rates))
+    assert value(rl.VanillaOption(("cash", "call", 0.0, 10.0), maturity=T), engine) == pytest.approx(10.0 * P, rel=1e-10)
+    assert value(rl.VanillaOption(("asset", "call", 0.0), maturity=T), engine) == pytest.approx(100.0 * math.exp(-0.01), rel=1e-12)
+    assert value(rl.VanillaOption(("cash", "put", 0.0, 10.0), maturity=T), engine) == 0.0
+    still = rl.NumericalSwitchingEngine(rl.SwitchingEquityRates(
+        rl.SwitchingBlackScholesProcess(CHAIN, S0=100.0, r=0.0, q=0.01, sigma=0.0),
+        rl.SwitchingVasicek(CHAIN, r0=0.03, a=0.5, b=0.03, sigma=0.0)))
+    ST, disc = 100.0 * math.exp(0.02), math.exp(-0.03)                   # the terminal price is known
+    for payoff, expected in ((("cash", "call", 100.0, 10.0), 10.0 * disc), (("asset", "call", 100.0), disc * ST),
+                             (("cash", "put", 105.0, 10.0), 10.0 * disc), (("asset", "put", 105.0), disc * ST),
+                             (("asset", "put", 101.0), 0.0), (("call", 100.0), disc * (ST - 100.0))):
+        assert value(rl.VanillaOption(payoff, maturity=T), still) == pytest.approx(expected, abs=1e-9)
+
+
+def test_a_curve_that_changes_behind_its_callable_is_not_cached():
+    rate = [0.01]
+    model = rl.SwitchingVasicek(ONE, r0=0.01, a=0.5, b=0.12, sigma=0.0)
+    times = [0.25 * i for i in range(1, 21)]
+    cds = rl.CreditDefaultSwap("buyer", spread=0.02, times=times, recovery=0.4, discount=lambda t: math.exp(-rate[0] * t))
+    cds.setPricingEngine(rl.NumericalSwitchingEngine(model))
+    cds.NPV(); before = cds.fairSpread()
+    rate[0] = 0.05                                                       # the same function, another curve
+    fresh = rl.CreditDefaultSwap("buyer", 0.02, times, 0.4, discount=0.05)
+    fresh.setPricingEngine(rl.NumericalSwitchingEngine(model)); fresh.NPV()
+    assert cds.fairSpread() == pytest.approx(fresh.fairSpread(), rel=1e-12) and cds.fairSpread() != before
+    kept = fresh._results; fresh.fairSpread()                            # a curve given as a rate is compared by it
+    assert fresh._results is kept
