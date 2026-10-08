@@ -277,3 +277,59 @@ def test_a_curve_that_changes_behind_its_callable_is_not_cached():
     assert cds.fairSpread() == pytest.approx(fresh.fairSpread(), rel=1e-12) and cds.fairSpread() != before
     kept = fresh._results; fresh.fairSpread()                            # a curve given as a rate is compared by it
     assert fresh._results is kept
+
+
+def _npv(instrument, engine):
+    instrument.setPricingEngine(engine)
+    return instrument.NPV()
+
+
+def _one_jump_reference(S0, r, q, T, sigma, lam):
+    """Dormant until one jump at an exponential time, then Black-Scholes: a mixture over the jump time, struck at the forward."""
+    from scipy.integrate import quad
+    from scipy.special import ndtr
+    F = S0 * math.exp((r - q) * T)
+    black = lambda V: math.exp(-r * T) * F * (2.0 * ndtr(0.5 * math.sqrt(V)) - 1.0)
+    return quad(lambda t: lam * math.exp(-lam * t) * black(sigma * sigma * (T - t)), 0.0, T, epsabs=1e-13, epsrel=1e-13)[0]
+
+
+def test_a_dormant_regime_with_carry_is_refused_on_the_grid_and_priced_without_carry():
+    chain = rl.RegimeChain([[-0.2, 0.2], [0.0, 0.0]])
+    for r, q in ((0.05, 0.0), (0.0, 0.05)):                              # pure advection in the dormant regime
+        model = rl.SwitchingBlackScholesProcess(chain, S0=100.0, r=r, q=q, sigma=[0.0, 0.30])
+        option = rl.VanillaOption(("call", 100.0 * math.exp(r - q)), maturity=1.0)
+        for engine in (rl.SwitchingFDReferee(model, regime=0), rl.SwitchingFDEngine(model, regime=0)):
+            option.setPricingEngine(engine)
+            with pytest.raises(ValueError, match="zero volatility"):
+                option.NPV()
+    model = rl.SwitchingBlackScholesProcess(chain, S0=100.0, r=0.05, q=0.05, sigma=[0.0, 0.30])
+    option = rl.VanillaOption(("call", 100.0), maturity=1.0)             # no carry: that regime only discounts
+    exact = _one_jump_reference(100.0, 0.05, 0.05, 1.0, 0.30, 0.2)
+    assert _npv(option, rl.SwitchingFDEngine(model, regime=0)) == pytest.approx(exact, rel=2e-3)
+
+
+def test_rate_options_exercised_today_need_no_grid():
+    model = rl.SwitchingVasicek(ONE, r0=0.05, a=0.5, b=0.05, sigma=0.01)  # the automatic grid has no width at T = 0
+    fd = lambda m=model, **kw: rl.SwitchingFDEngine(m, n=401, steps=200, **kw)
+    flows = [(1.0, 0.03), (2.0, 0.03), (3.0, 1.03)]
+    bond = lambda S: _npv(rl.ZeroCouponBond(S), rl.NumericalSwitchingEngine(model))
+    for kind in ("call", "put"):
+        intrinsic = lambda B, K: max(B - K, 0.0) if kind == "call" else max(K - B, 0.0)
+        assert _npv(rl.ZeroCouponBondOption(kind, 0.86, 0.0, 3.0), fd()) == pytest.approx(intrinsic(bond(3.0), 0.86), abs=1e-12)
+        B = sum(c * bond(S) for S, c in flows)
+        assert _npv(rl.CouponBondOption(kind, 0.93, 0.0, flows), fd()) == pytest.approx(intrinsic(B, 0.93), abs=1e-12)
+    for kind, strike in (("cap", 0.02), ("floor", 0.08)):
+        cap = rl.CapFloor(kind, times=[0.0, 0.5, 1.0], strike=strike, notional=1e6)
+        assert _npv(cap, fd()) == pytest.approx(_npv(cap, rl.NumericalSwitchingEngine(model)), rel=1e-6)
+        assert _npv(cap, fd()) == pytest.approx(_npv(cap, fd(width=0.08)), rel=1e-9)
+    hidden = rl.SwitchingVasicek(CHAIN, r0=0.03, a=0.5, b=[0.06, 0.02], sigma=0.01)
+    option = rl.ZeroCouponBondOption("call", 0.88, 0.0, 3.0)
+    for information in ("inferred", "observed"):                         # the payoff after the average, or before it
+        kw = dict(regime=[0.4, 0.6], information=information)
+        assert _npv(option, fd(hidden, **kw)) == _npv(option, rl.NumericalSwitchingEngine(hidden, **kw))
+    cap = rl.CapFloor("cap", times=[0.0, 0.5, 1.0], strike=0.02, notional=1.0)
+    first = rl.CouponBondOption("put", 1.0 / 1.01, 0.0, [(0.5, 1.0)])
+    later = rl.CapFloor("cap", times=[0.5, 1.0], strike=0.02, notional=1.0)
+    kw = dict(regime=[0.4, 0.6], information="inferred")
+    parts = 1.01 * _npv(first, rl.NumericalSwitchingEngine(hidden, **kw)) + _npv(later, fd(hidden, **kw))
+    assert _npv(cap, fd(hidden, **kw)) == pytest.approx(parts, rel=1e-12)

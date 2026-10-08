@@ -99,12 +99,23 @@ class SwitchingFDEngine:
         exact = self._withoutAGrid(instrument, rate)                     # deterministic models, and G2 with one live factor
         if exact is not None:
             return exact if results else exact["value"]
+        if rate and not isinstance(instrument, CapFloor) and _exerciseTerms(instrument)[0][-1] <= 0:
+            out = self._exercisedNow(instrument)
+            return out if results else out["value"]
         if acts and self.information == "inferred" and not regimeIsKnown(self.model):
             if not rate:
                 raise notRevealed("early exercise")
             out = self._inferredRateOption(instrument)
             return out if results else out["value"]
         return self._byRegime(instrument, results)
+
+    def _exercisedNow(self, inst):
+        """An option on a bond or a swap whose last exercise date is today: the payoff on today's bonds, with no grid
+        (the automatic one has no width over no time). The characteristic-function engine holds that payoff for a
+        known regime and for either kind of belief."""
+        from .engines import NumericalSwitchingEngine
+        start = self.regime if self.belief is None else list(self.belief)
+        return {"value": NumericalSwitchingEngine(self.model, regime=start, information=self.information).calculate(inst)}
 
     def _withoutAGrid(self, instrument, rate):
         """A model with no diffusion has a known path, and a grid in a state that does not move has no width. Price
@@ -237,9 +248,11 @@ class SwitchingFDEngine:
         m = self.model
         if not hasattr(m, "bondOnGrid"):
             raise TypeError("Bermudan and finite-difference rate options need a short-rate model with a grid (SwitchingVasicek, SwitchingHullWhite, SwitchingCoxIngersollRoss, SwitchingG2)")
-        Big, grid, _, r0, nR = self._system(inst, self.width)
         exercises, isCall, K = _exerciseTerms(inst)
         T_end = exercises[-1]
+        if T_end <= 0:                                                   # a caplet that fixes today
+            return self._exercisedNow(inst)
+        Big, grid, _, r0, nR = self._system(inst, self.width)
         def exerciseValue(t):
             """Per regime: the bond of the remaining cash flows less the strike (call) on the rate grid, expressed in
             the grid's numeraire: the grid discounts with the factor only, the fitted drift's part is deterministic."""
@@ -283,6 +296,8 @@ class SwitchingFDEngine:
             inst = CouponBondOption("call" if inst.isCall else "put", inst.strike, inst.maturity, [(inst.bondMaturity, 1.0)])
         exercises, isCall, K = _exerciseTerms(inst)
         T_end = exercises[-1]
+        if T_end <= 0:
+            return self._exercisedNow(inst)
         nr, npts = self.n if isinstance(self.n, tuple) else (min(int(self.n), 301), 41)
         _, _, _, rgrid, _, r0 = m.operators(inst, nr, self.width if not isinstance(self.width, tuple) or len(self.width) == 2 else None)
         grid = Grid2D(rgrid.x[0], rgrid.x[-1], nr, 0.0, 1.0, npts)
