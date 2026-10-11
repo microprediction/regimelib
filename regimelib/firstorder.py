@@ -102,6 +102,29 @@ class Grid2D:
         self.d1xv = sp.kron(self.gx.d1(), self.gv.d1(), format="csr")
         self.X, self.V = np.repeat(self.x, nv), np.tile(self.v, nx)
 
+    def cross(self, sign):
+        """d_xv for a coefficient of the given sign. The centred four-corner stencil puts a negative weight on one
+        diagonal whatever the sign, so it is never monotone and misprices when the correlation is strong. Averaging
+        the two one-sided products along the diagonal that matches the sign (u_{++} and u_{--} for a positive
+        coefficient, u_{+-} and u_{-+} for a negative one) is second order on a uniform grid and puts the negative
+        weights on the axis neighbours, where the diffusion outweighs them (Lawson's seven-point stencil). The
+        edges keep the centred one-sided form."""
+        if sign == 0:
+            return self.d1xv
+        def onesided(g):
+            h = np.diff(g.x); n = g.n
+            fwd = sp.diags([np.r_[-1 / h, 0.0], 1 / h], [0, 1], shape=(n, n), format="csr")       # last row zero
+            bwd = sp.diags([np.r_[0.0, 1 / h], -1 / h], [0, -1], shape=(n, n), format="csr")      # first row zero
+            return fwd, bwd
+        (xf, xb), (vf, vb) = onesided(self.gx), onesided(self.gv)
+        if sign > 0:
+            S = 0.5 * (sp.kron(xf, vf) + sp.kron(xb, vb))
+        else:
+            S = 0.5 * (sp.kron(xf, vb) + sp.kron(xb, vf))
+        inside = np.zeros((len(self.x), len(self.v)), bool); inside[1:-1, 1:-1] = True
+        m = inside.ravel().astype(float)
+        return (sp.diags(m) @ S + sp.diags(1.0 - m) @ self.d1xv).tocsr()
+
     def interp(self, u, p):
         from scipy.interpolate import RegularGridInterpolator
         f = RegularGridInterpolator((self.x, self.v), np.asarray(u).reshape(len(self.x), len(self.v)))

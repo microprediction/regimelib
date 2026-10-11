@@ -499,7 +499,7 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
-        A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
+        A2 = self.rho * V @ grid.cross(np.sign(self.rho))              # multiplies xi
         Lbar = (sp.diags(self.r - self.q - 0.5 * grid.V) @ grid.d1x + 0.5 * V @ grid.d2x
                 + sp.diags(self.kappa * (self.theta - grid.V)) @ grid.d1v + xi2bar * A1 + xibar * A2 - self.r * I)
         u0 = instrument.payoffOnGrid(np.exp(grid.X))
