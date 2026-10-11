@@ -102,6 +102,11 @@ class SwitchingFDEngine:
         if rate and not isinstance(instrument, CapFloor) and _exerciseTerms(instrument)[0][-1] <= 0:
             out = self._exercisedNow(instrument)
             return out if results else out["value"]
+        if (not rate and isinstance(instrument, VanillaOption) and not isinstance(instrument, BarrierOption)
+                and instrument.maturity == 0):                           # expiring now: nothing left to decide
+            from .engines import payoffNow
+            out = payoffNow(self.model, instrument)
+            return out if results else out["value"]
         if acts and self.information == "inferred" and not regimeIsKnown(self.model):
             if not rate:
                 raise notRevealed("early exercise")
@@ -166,6 +171,17 @@ class SwitchingFDEngine:
                     width = self.width[axis] if isinstance(self.width, tuple) else self.width
                     engine = SwitchingFDEngine(one, regime=start, n=n, steps=self.steps, width=width, information=self.information)
                     return engine.calculate(instrument, results=True)
+            if m.a == m.b:
+                # equal speeds: the rate moves only through z = x + y, a Hull-White factor with variance
+                # sigma^2 + eta^2 + 2 rho sigma eta, and the curve-fit forcing is that model's. A grid in (x, y) would
+                # resolve z only as the difference of two wider marginals
+                sig, eta, rho = (np.broadcast_to(np.asarray(v, float), (m.n,)) for v in (m.sigma, m.eta, m.rho))
+                vols = [math.sqrt(max(s * s + e * e + 2 * c * s * e, 0.0)) for s, e, c in zip(sig, eta, rho)]
+                one = SwitchingHullWhite(m.chain, m.discount, m.a, vols)
+                n = max(self.n) if isinstance(self.n, tuple) else self.n
+                width = sum(self.width) if isinstance(self.width, tuple) else self.width    # |z| <= |x| + |y|
+                engine = SwitchingFDEngine(one, regime=start, n=n, steps=self.steps, width=width, information=self.information)
+                return engine.calculate(instrument, results=True)
         return None
 
     @byBelief()
