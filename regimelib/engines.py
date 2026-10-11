@@ -453,12 +453,28 @@ class SwitchingEngine:
         m, T, K = self.model, opt.maturity, opt.strike
         if opt.payoffType != "vanilla":
             raise TypeError("digitals are not priced under the hybrid model")
+        def still(p):
+            """No diffusion in the starting regime (a Black-Scholes equity, or a rate with a volatility)."""
+            if hasattr(p, "v0") or not hasattr(p, "sigma"):
+                return False
+            return float(np.broadcast_to(np.asarray(p.sigma, float), (m.n,))[self.regime]) == 0.0
+        if still(m.equity) and still(m.rates) and _noDiffusion(m) != "deterministic":
+            # until the chain first leaves this regime the price moves deterministically, and it may never leave
+            raise ArithmeticError("neither the equity nor the rate diffuses in the starting regime, so the terminal price "
+                                  "has an atom (the path that stays in it), which the Fourier inversion does not resolve. "
+                                  "Give the regime a volatility.")
         def psi(w):
             g, gfuncs, factor = m.discountedForcing(w, T)
             return factor * self._aVector(g, gfuncs, T)[0][self.regime]
         U = 8.0
         while abs(psi(U - 0.5j)) > 1e-14 * K ** 0.5 and U < 1e4:
             U *= 2
+        left = abs(psi(U - 0.5j))
+        if left > 1e-7 * U * K ** 0.5:                                         # what the cutoff drops, against the strike
+            raise ArithmeticError(f"the characteristic function is still {left:.2g} at u = {U:g}, the largest frequency "
+                                  "integrated: the terminal price has an atom (no diffusion from this regime, with a "
+                                  "positive chance of staying in it) or a density too peaked to invert. The transform "
+                                  "engines do not price this; give the regime a volatility.")
         bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
         # the integrand oscillates at the forward's moneyness, and the forward carries the dividends and the bond
         forward = m.S0 * math.exp(-m.q * T) / bond
