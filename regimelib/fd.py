@@ -159,11 +159,11 @@ class SwitchingFDEngine:
                                "NumericalSwitchingEngine or FastSwitchingEngine")
                 return {"value": deterministicEquity(m, instrument)}
         if rate and isinstance(m, SwitchingG2):
-            for speed, vols, dead in ((m.a, m.sigma, m.eta), (m.b, m.eta, m.sigma)):
+            for axis, (speed, vols, dead) in enumerate(((m.a, m.sigma, m.eta), (m.b, m.eta, m.sigma))):
                 if all(v == 0.0 for v in dead) and any(v != 0.0 for v in vols):
                     one = SwitchingHullWhite(m.chain, m.discount, speed, vols)
-                    n = self.n[0] if isinstance(self.n, tuple) else self.n
-                    width = self.width[0] if isinstance(self.width, tuple) else self.width
+                    n = self.n[axis] if isinstance(self.n, tuple) else self.n          # the live factor's own controls
+                    width = self.width[axis] if isinstance(self.width, tuple) else self.width
                     engine = SwitchingFDEngine(one, regime=start, n=n, steps=self.steps, width=width, information=self.information)
                     return engine.calculate(instrument, results=True)
         return None

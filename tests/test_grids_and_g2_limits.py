@@ -83,8 +83,8 @@ def test_g2_with_one_factor_switched_off_is_hull_white():
     reference = price(swaption, rl.SwitchingFDEngine(hw, n=201, steps=100))
     x_only = rl.SwitchingG2(CHAIN, 0.03, 0.5, [0.012, 0.008], 0.1, 0.0, 0.0)
     y_only = rl.SwitchingG2(CHAIN, 0.03, 0.1, 0.0, 0.5, [0.012, 0.008], 0.0)
-    for model in (x_only, y_only):
-        assert price(swaption, rl.SwitchingFDEngine(model, n=(201, 21), steps=100)) == pytest.approx(reference, rel=1e-12)
+    for model, n in ((x_only, (201, 21)), (y_only, (21, 201))):          # n is (nx, ny): the live factor's count
+        assert price(swaption, rl.SwitchingFDEngine(model, n=n, steps=100)) == pytest.approx(reference, rel=1e-12)
 
 
 def test_a_grid_needs_a_positive_width():

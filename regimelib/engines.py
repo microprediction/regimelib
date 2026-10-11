@@ -646,7 +646,6 @@ class FastSwitchingEngine(SwitchingEngine):
                                  "fast within groups of regimes and slowly between them. Use NumericalSwitchingEngine.")
         order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
-        self._pi = model.chain.stationaryDistribution()
         self.orderUsed = self.lastIncrement = None
 
     def _aVector(self, g, gfuncs, T, a0=None, fallback=True):
@@ -662,7 +661,7 @@ class FastSwitchingEngine(SwitchingEngine):
         failures = (OverflowError, FloatingPointError, ValueError, ZeroDivisionError, np.linalg.LinAlgError)
         # a terminal vector nearly orthogonal to the stationary law (a payoff in a rare regime) is expanded as the
         # difference of two solutions near one, which loses it: solve instead
-        rare = a0 is not None and abs(self._pi @ np.asarray(a0)) < 1e-6 * np.max(np.abs(a0))
+        rare = a0 is not None and abs(self.model.chain.stationaryDistribution() @ np.asarray(a0)) < 1e-6 * np.max(np.abs(a0))
         base = np.ones(self.model.n, complex); later = None
         # the series diverges where the forcing is large, which for a transform is above some frequency. Once three
         # nodes in a row have diverged at a maturity, the nodes above them are solved without trying the series first
@@ -738,7 +737,7 @@ class FastSwitchingEngine(SwitchingEngine):
         if later is None:
             return avec, Q @ avec + gT * avec                            # solved numerically: the equation holds
         if N == 0:
-            return avec, (self._pi @ gT) * avec
+            return avec, (self.model.chain.stationaryDistribution() @ gT) * avec   # the chain as it is now
         with np.errstate(all="ignore"):
             small = np.all(np.isfinite(later)) and abs(later[i] - avec[i]) <= 0.5 * abs(avec[i])
         state = later if small else avec

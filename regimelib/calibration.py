@@ -60,6 +60,7 @@ _NONNEGATIVE = ("sigma", "eta", "xi", "v0", "jumpIntensity", "logJumpVol", "jump
 _SPEEDS = ("kappa", "a", "k")                                    # reversion speeds: zero is a supported limit
 _POSITIVE = ("nu", "S0")                                         # the gamma variance rate, the spot
 _TINY = 1e-8
+_WALL = 1e6                                                      # the residual at parameters that are not a model
 
 
 def defaultBounds(model, name):
@@ -108,7 +109,12 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
     """Fit `parameters` (model attribute names, per-regime arrays, and/or "chain" for the off-diagonal rates) to the
     helpers by least squares on their calibration errors. `engine` is a factory model -> engine (default: the
     numerical engine, whose terminal vectors are shared across strikes at each maturity). Returns the scipy result;
-    the model is left at the fitted values."""
+    the model is left at the fitted values. Parameters outside the model's own domain (beyond the bounds, which are a
+    box) are given a large residual instead of a price."""
+    if kwargs.get("workers") is not None:
+        # every residual writes the candidate into this one model and its helpers, so evaluations cannot overlap
+        raise ValueError("calibrate evaluates its residuals on the one model it is given, in turn: parallel finite "
+                         "differences (workers) would price one candidate through another's parameters. Omit workers.")
     engine = engine or (lambda m: NumericalSwitchingEngine(m))
     helpers, parameters = tuple(helpers), tuple(parameters)    # read once: either may be a generator
     if not helpers:
@@ -132,15 +138,29 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
             raise ValueError(f"the starting value of {p} is outside its bounds [{lo[k]}, {hi[k]}]: {outside}")
         k += s
 
-    def apply(x):
+    def write(x):
         k = 0
         for p, s in zip(parameters, sizes):
             _set(model, p, x[k:k + s]); k += s
+
+    def apply(x):
+        write(x)
         eng = engine(model)
         for h in helpers:
             h.setPricingEngine(eng)
 
+    def admissible():
+        """Bounds are a box; a model may also tie its parameters together (variance gamma's finite E[S])."""
+        try:
+            getattr(model, "checkParameters", lambda: None)()
+        except ValueError:
+            return False
+        return True
+
     def residuals(x):
+        write(x)
+        if not admissible():                                # not a model: a wall, so the fit stays where prices exist
+            return np.full(len(helpers), _WALL)
         apply(x)
         return np.array([h.volatilityError() if useVolatilityError else h.calibrationError() for h in helpers])
     res = least_squares(residuals, x0, bounds=(lo, hi), **kwargs)

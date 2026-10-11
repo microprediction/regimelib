@@ -141,8 +141,8 @@ even belief:
 .. code-block:: text
 
                          observed   inferred
-    European swaption    1.3834     1.1690
-    Bermudan swaption    2.0221     1.9078
+    European swaption    1.3835     1.1690
+    Bermudan swaption    2.0220     1.9079
 
 When the volatility also switches the regime is revealed, and the characteristic-function engines price the same
 swaption under either setting:

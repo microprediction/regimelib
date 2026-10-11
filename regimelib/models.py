@@ -114,7 +114,10 @@ class SwitchingVasicek(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            sd = math.sqrt(max(s2) * _spread(self.a, _lastDecision(instrument))); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            # by the last decision the rate has moved a fraction 1 - e^{-a T} of the way to a level, whatever the regime path
+            Tend = _lastDecision(instrument); sd = math.sqrt(max(s2) * _spread(self.a, Tend))
+            move = -math.expm1(-self.a * Tend) * max(abs(b.min() - self.r0), abs(b.max() - self.r0))
+            L = width or 8 * sd + move
             grid = Grid1D(self.r0 - L, self.r0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift, Adiff = self.a * D1, 0.5 * D2
@@ -295,6 +298,10 @@ class SwitchingVarianceGammaProcess(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
         self.sigma, self.nu, self.theta = _per_regime(sigma, self.n, "sigma"), _per_regime(nu, self.n, "nu"), _per_regime(theta, self.n, "theta")
+        self.checkParameters()
+
+    def checkParameters(self):
+        """The constructor's conditions on the parameters as they are now (calibration moves them afterwards)."""
         _check(self.nu, "nu", lambda v: v > 0.0, "finite and positive (as nu tends to zero the model is Black-Scholes: "
                "use SwitchingBlackScholesProcess)")
         for i, (sg, nu_, th) in enumerate(zip(self.sigma, self.nu, self.theta)):
@@ -483,9 +490,11 @@ class SwitchingHestonVolOfVol(SwitchingModel):
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
         # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
-        # and from v0 it spreads on the way: Var v_T = v0 xi^2 (e^{-kappa T} - e^{-2 kappa T}) / kappa + the stationary part
+        # and from v0 it spreads on the way: Var v_T = v0 xi^2 (e^{-kappa T} - e^{-2 kappa T}) / kappa
+        # + theta xi^2 (1 - e^{-kappa T})^2 / (2 kappa), the stationary spread only as T grows
         k = self.kappa; onTheWay = (math.exp(-k * T) - math.exp(-2 * k * T)) / k if k > 0 else T
-        spread = math.sqrt(self.v0 * xi2bar * onTheWay + (self.theta * xi2bar / (2 * k) if k > 0 else 0.0))
+        settled = self.theta * xi2bar * math.expm1(-k * T) ** 2 / (2 * k) if k > 0 else 0.0
+        spread = math.sqrt(self.v0 * xi2bar * onTheWay + settled)
         vmax = max(5 * vtop, vtop + 5 * spread)
         x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
@@ -597,6 +606,20 @@ class SwitchingCEVProcess(SwitchingModel):
         vol_eff = math.sqrt(max(s2)) * self.S0 ** (self.beta - 1)
         L = width or 6 * vol_eff * math.sqrt(T) * self.S0 + 2 * abs(self.r - self.q) * T * self.S0
         grid = Grid1D(width[0], width[1], n) if isinstance(width, tuple) else Grid1D(max(self.S0 - L, 1e-8), self.S0 + L, n)
+        # the Black-Scholes test (see _bs_operators) at the spot and the strike: the carry over a cell against the
+        # diffusion across it in the quietest regime
+        quiet = float(np.min(s2[s2 > 0])) if np.any(s2 > 0) else 0.0
+        if quiet > 0.0 and self.r != self.q:
+            if np.any(s2 == 0.0):
+                raise ValueError(f"a regime with zero volatility beside regimes that diffuse, with a carry of "
+                                 f"{self.r - self.q:.3g}: that regime's equation is pure advection (an infinite cell "
+                                 "Peclet number), which centred differences misprice on any grid. This case is not priced.")
+            h = float(np.max(np.diff(grid.x)))
+            peclet = max(abs(self.r - self.q) * s * h / (0.5 * quiet * s ** (2 * self.beta)) for s in (self.S0, K))
+            if peclet > 2.0:
+                raise ValueError(f"the grid is too coarse for a volatility coefficient of {math.sqrt(quiet):.3g} against a "
+                                 f"carry of {self.r - self.q:.3g}: the cell Peclet number is {peclet:.3g} (above 2), and "
+                                 f"centred differences misprice there. Use about {int(n * peclet / 2) + 1} points.")
         D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
         A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
         Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I
