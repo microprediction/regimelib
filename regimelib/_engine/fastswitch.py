@@ -162,6 +162,9 @@ class ExpPoly:
 
 
 # ------------------------------------------------------------------ the inner layer on the mean-zero subspace
+CLUSTER = 0.15                                                    # see SchurLayer: the widest relative cluster
+
+
 class SchurLayer:
     """Solves eta' = Q0 eta + P f, eta(0) = y0, on the subspace {v : pi.v = 0}, with P f = f - one (pi.f).
 
@@ -181,17 +184,22 @@ class SchurLayer:
         Bz = null_space(pi[None, :])                                  # orthonormal basis of the mean-zero subspace
         Tz, Uz = schur((Bz.T @ Q0 @ Bz).astype(complex), output='complex')
         dz = np.diag(Tz).copy()
-        tol = 1e-6 * max(1.0, float(np.abs(dz).max()))
-        mu = dz.copy()
-        for i in range(len(mu)):                                      # nearly equal eigenvalues share one exponent mu
-            close = np.abs(mu - mu[i]) < tol
-            mu[close] = mu[close].mean()
+        # nearly equal eigenvalues share one exponent mu. Apart, k modes at relative spacing h go through divided
+        # differences that lose about eps / h^(k-1); together, the series in delta shrinks by |delta| / |Re mu| a
+        # term. So a cluster is everything within 0.15 of its first member's decay rate (or 1e-6 of the
+        # largest eigenvalue, for rates near zero), and no member is farther than that from it
+        floor = 1e-6 * max(1.0, float(np.abs(dz).max()))
+        mu = dz.copy(); free = np.ones(len(dz), bool)
+        for i in np.argsort(-dz.real, kind="stable"):
+            if free[i]:
+                close = free & (np.abs(dz - dz[i]) < max(floor, CLUSTER * abs(dz[i].real)))
+                mu[close] = dz[close].mean(); free[close] = False
         self.mu, self.delta = mu, dz - mu                             # delta kept exactly, as a perturbation series
         self.T, self.W = Tz, Bz @ Uz                                  # eta = W z, z = W^H eta
 
     def _diag_solve(self, j, forcing, y0):
         """z' = (mu_j + delta_j) z + forcing: the terms of order delta_j^p solved in turn, all in exp(mu_j tau).
-        Each term is smaller than the last by about |delta_j| / |Re mu_j| <= 1e-6."""
+        Each term is smaller than the last by about |delta_j| / |Re mu_j|, at most about CLUSTER."""
         mu, delta = self.mu[j], self.delta[j]
         z = ExpPoly.solve(mu, forcing, y0)
         term = z
