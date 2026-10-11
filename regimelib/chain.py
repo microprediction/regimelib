@@ -115,8 +115,10 @@ class RegimeChain:
             raise ValueError("the transition matrix must be square with at least one regime")
         if not (math.isfinite(dt) and dt > 0):
             raise ValueError(f"dt must be finite and positive, got {dt}")
-        if not np.all(np.isfinite(P)) or np.any(P < 0) or np.any(np.abs(P.sum(axis=1) - 1.0) > 1e-9):
+        roundoff = 64 * np.finfo(float).eps * P.shape[0]            # a structural zero from expm, e.g. -1.5e-16
+        if not np.all(np.isfinite(P)) or np.any(P < -roundoff) or np.any(np.abs(P.sum(axis=1) - 1.0) > 1e-9):
             raise ValueError("a transition matrix has nonnegative entries and rows that sum to one")
+        P = np.maximum(P, 0.0); P /= P.sum(axis=1, keepdims=True)
         n = P.shape[0]
         if n == 2:                                             # in closed form: exp(Q dt) has second eigenvalue 1 - p - q
             p, q = P[0, 1], P[1, 0]

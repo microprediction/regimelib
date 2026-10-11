@@ -78,9 +78,12 @@ class SwitchingEquityRates(SwitchingModel):
         nx, nr = (n, n) if np.isscalar(n) else n
         if width is None:
             # log S_T carries the integrated short rate as well as the equity's own diffusion
+            # and the rate's mean moves a fraction 1 - e^{-a t} of the way to a level by t, whatever the regime path:
+            # by T it has carried log S by at most |r0| T + max |b - r0| (T - B(T))
+            gap = abs(b - R.r0).max()
             Lx = (8 * (math.sqrt(max(sS ** 2) * T) + math.sqrt(max(sR ** 2) * _m.int_B2(R.a, T)))
-                  + 2 * T * (max(abs(b).max(), abs(R.r0)) + abs(E.q)))
-            Lr = 6 * math.sqrt(max(sR ** 2) * _m.ou_variance(R.a, T)) + abs(b - R.r0).max()
+                  + 2 * (abs(R.r0) * T + gap * (T - _m.stable_B(R.a, T)) + abs(E.q) * T))
+            Lr = 6 * math.sqrt(max(sR ** 2) * _m.ou_variance(R.a, T)) - math.expm1(-R.a * T) * gap
         else:
             Lx, Lr = (width, width) if np.isscalar(width) else width
         x0 = math.log(E.S0)
