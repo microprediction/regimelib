@@ -69,8 +69,8 @@ Python
 
 .. code-block:: text
 
-    averaged model     8.80672
-    Green-Kubo term    +0.01899
-    memory term        -0.06712
-    first order        8.75860
-    switching price    8.75760   (coupled equations on the same grid)
+    averaged model     8.80692
+    Green-Kubo term    +0.01894
+    memory term        -0.06717
+    first order        8.75869
+    switching price    8.75765   (coupled equations on the same grid)

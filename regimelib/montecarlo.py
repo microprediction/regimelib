@@ -10,6 +10,9 @@ from .information import startingBelief, byBelief
 from ._engine.models import stable_B, SMALL_SPEED
 
 
+_NODES, _WEIGHTS = np.polynomial.legendre.leggauss(8)
+
+
 def _segment(a, lo, hi):
     """(int_lo^hi B(t) dt, int_lo^hi B(t)^2 dt) for the loading B(t) = (1 - e^{-a t}) / a: closed forms away from
     a = 0, Gauss-Legendre near it, where the closed forms cancel."""
@@ -17,7 +20,10 @@ def _segment(a, lo, hi):
         I1 = lambda t: (t + math.expm1(-a * t) / a) / a
         I2 = lambda t: (t + 2.0 * math.expm1(-a * t) / a - math.expm1(-2.0 * a * t) / (2.0 * a)) / a ** 2
         return I1(hi) - I1(lo), I2(hi) - I2(lo)
-    x, w = np.polynomial.legendre.leggauss(8)
+    if a == 0.0:                                                    # B(t) = t
+        d = hi - lo
+        return d * (hi + lo) / 2, d * (hi * hi + hi * lo + lo * lo) / 3
+    x, w = _NODES, _WEIGHTS
     ts = lo + (x + 1) * (hi - lo) / 2
     b = np.array([stable_B(a, t) for t in ts])
     return float(w @ b) * (hi - lo) / 2, float(w @ (b * b)) * (hi - lo) / 2
