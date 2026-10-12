@@ -181,7 +181,11 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) * _spread(self.k, _lastDecision(instrument)))
+            # by the last decision the mean has moved a fraction 1 - e^{-k T} of the way to the highest level, whatever
+            # the regime path: size the grid from there, not from the level itself
+            Tend = _lastDecision(instrument)
+            level = self.r0 + max(th.max() - self.r0, 0.0) * -math.expm1(-self.k * Tend)
+            top = width or level + 10 * self.sigma * math.sqrt(level * _spread(self.k, Tend))
             grid = Grid1D(0.0, top, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift = self.k * D1
