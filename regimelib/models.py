@@ -369,7 +369,9 @@ class SwitchingHullWhite(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            L = width or 8 * math.sqrt(max(s2) * _m.ou_variance(self.a, max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])) if self.a == 0 else max(s2) / (2 * self.a))
+            # the factor's variance by the last decision, not its stationary sigma^2 / (2a): over a short horizon that
+            # is far wider than the factor travels, and as a -> 0 it diverges
+            L = width or 8 * math.sqrt(max(s2) * _m.ou_variance(self.a, _lastDecision(instrument)))
             grid = Grid1D(-L, L, n)
         D1, D2 = grid.d1(), grid.d2(); x = grid.x
         Adiff = 0.5 * D2

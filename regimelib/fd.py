@@ -75,8 +75,13 @@ class SwitchingFDEngine:
         blk = slice(self.regime * grid.n, (self.regime + 1) * grid.n)
         S0 = self.model.S0
         if hasattr(grid, "gx"):                                          # Grid2D: (log S, second factor)
-            u2 = v[blk].reshape(len(grid.x), len(grid.v)); j = int(np.argmin(abs(grid.v - x0[1])))
-            ux, uxx = _localDerivatives(grid.x, u2[:, j], x0[0])
+            # along log S on the two slices of the second factor around its starting value, interpolated to it as the
+            # value is: the nearest slice alone jumps as the start crosses a midpoint
+            u2 = v[blk].reshape(len(grid.x), len(grid.v))
+            j = int(np.clip(np.searchsorted(grid.v, x0[1]) - 1, 0, len(grid.v) - 2))
+            w = float(np.clip((x0[1] - grid.v[j]) / (grid.v[j + 1] - grid.v[j]), 0.0, 1.0))
+            (lo, llo), (hi, lhi) = (_localDerivatives(grid.x, u2[:, k], x0[0]) for k in (j, j + 1))
+            ux, uxx = (1 - w) * lo + w * hi, (1 - w) * llo + w * lhi
             theta = -grid.interp((Big @ v)[blk], x0)
             return {"value": grid.interp(v[blk], x0), "delta": ux / S0, "gamma": (uxx - ux) / (S0 * S0), "theta": theta}
         u = v[blk]
