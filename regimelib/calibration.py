@@ -115,6 +115,11 @@ def calibrate(model, helpers, parameters, engine=None, bounds=None, useVolatilit
         # every residual writes the candidate into this one model and its helpers, so evaluations cannot overlap
         raise ValueError("calibrate evaluates its residuals on the one model it is given, in turn: parallel finite "
                          "differences (workers) would price one candidate through another's parameters. Omit workers.")
+    if isinstance(kwargs.get("jac"), str) and kwargs["jac"] == "cs":
+        # a complex step needs the price to be analytic in each parameter through complex arithmetic; the pricers take
+        # real parameters, so the step would be dropped and the Jacobian read as zero (a false convergence)
+        raise ValueError("calibrate does not support jac='cs': the pricers take real parameters, so a complex step is "
+                         "lost and the Jacobian comes out zero. Use '2-point' (the default) or '3-point'.")
     engine = engine or (lambda m: NumericalSwitchingEngine(m))
     helpers, parameters = tuple(helpers), tuple(parameters)    # read once: either may be a generator
     if not helpers:
