@@ -1,0 +1,16 @@
+\begin{tabular}{llrrr}\toprule
+Instrument & QuantLib engine & regimelib & QuantLib & rel.\ diff.\\\midrule
+Vasicek bond, $T=5$ & \texttt{Vasicek::discountBond} & 0.83445782 & 0.83445782 & 0.0e+00\\
+Hull--White bond call & \texttt{HullWhite::discountBondOption} & 0.014645681 & 0.014645681 & 2.4e-15\\
+G2++ bond call & \texttt{G2::discountBondOption} & 0.016784068 & 0.016784068 & 3.1e-13\\
+Hull--White payer swaption $2\times5$ & \texttt{JamshidianSwaptionEngine} & 0.0084708386 & 0.0084708405 & 2.2e-07\\
+Hull--White Bermudan swaption & \texttt{FdHullWhiteSwaptionEngine} & 0.013171556 & 0.013171543 & 9.7e-07\\
+Hull--White cap, 4 caplets & \texttt{AnalyticCapFloorEngine} & 0.013715712 & 0.013715712 & 3.3e-15\\
+Black--Scholes put & \texttt{AnalyticEuropeanEngine} & 11.504233 & 11.504233 & 8.7e-13\\
+Heston put & \texttt{AnalyticHestonEngine} & 9.2806468 & 9.2806468 & 1.1e-11\\
+American put & \texttt{FdBlackScholesVanillaEngine} & 11.793521 & 11.793912 & 3.3e-05\\
+Down-and-out call & \texttt{AnalyticBarrierEngine} & 9.5800708 & 9.5800332 & 3.9e-06\\
+Geometric Asian call & \texttt{AnalyticContinuousGeometric...} & 5.8327546 & 5.8327546 & 1.7e-12\\
+Black--Scholes--Hull--White put, $\rho=0.4$ & \texttt{AnalyticBSMHullWhiteEngine} & 14.522982 & 14.522982 & 1.3e-12\\
+CDS fair spread, CIR intensity & \texttt{MidPointCdsEngine} & 0.015712784 & 0.015714177 & 8.9e-05\\
+\bottomrule\end{tabular}
