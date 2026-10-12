@@ -140,6 +140,9 @@ price for the same inputs.
    * - :doc:`information`
      - a belief as the starting regime; observed against inferred regimes for options on bonds and swaps and for
        early exercise; the belief as a state variable
+   * - :doc:`fluctuation`
+     - what the Green–Kubo constant does to a price, and a test of whether volatility fluctuates (H0: K = 0) from
+       returns, with its size and power on simulated paths
 
 The common formula
 ------------------
@@ -266,3 +269,4 @@ this one.
    bond_options
    instruments
    information
+   fluctuation
