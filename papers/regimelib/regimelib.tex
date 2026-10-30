@@ -25,7 +25,7 @@
 \title{Pricing under a Hidden Markov Regime by the Fast-Switching Expansion:\\
 The Reduced System and Its Asymptotics}
 \author{Peter Cotton\thanks{\texttt{peter.cotton@microprediction.com}. Code: \url{https://github.com/microprediction/regimelib}; documentation: \url{https://regimeswitching.org}.}}
-\date{September 2026}
+\date{First version: September 25, 2026. This version: October 30, 2026.}
 
 \begin{document}
 \maketitle
@@ -77,7 +77,7 @@ characteristic function prices equity options when the rate and the underlying s
 
 The implementation, \rl{}, follows \ql{}'s classes with a chain in front of the parameters. Every model reduces
 to \ql{}'s when the regimes coincide, and a suite of certificates checks that limit against \ql{} and the
-switching case against a numerical, grid or Monte Carlo referee. The tables below are written by a script in the
+switching case against a numerical, grid or Monte Carlo referee. The tables are written by a script in the
 repository.
 
 \section{The reduced system}
@@ -140,7 +140,7 @@ against the drift, or the Heston volatility of variance $\xi_i$ against the mean
 The two-state case of the reduction, a pair of linear ODEs, is in \citet{cotton2001} and again in \citet{elliott2002} for the Vasicek bond.
 One form covers the whole catalogue, including the terminal exponents that bond options need and the complex
 forcings of characteristic functions. The models outside the catalogue are exactly those with a non-commuting
-switched operator, and they are priced at first order below.
+switched operator, and they are priced at first order.
 
 \section{The fast-switching expansion}
 \label{sec:expansion}
@@ -252,6 +252,30 @@ Under Hull--White the deterministic part of the discounting scales the cash flow
 construction applies to the zero-coupon bond with $z = B_a x_T + B_b y_T$ as the single variable and a
 two-factor terminal forcing.
 
+\paragraph{Observed and inferred regimes.}
+A price in regime $i$ is the price when the regime is known at the valuation date. From a belief $p$ about it, a
+claim whose payoff depends only on observed quantities (a bond, an option on an equity, a default) is worth
+$\sum_i p_i u_i$, because nobody acts on the regime and pricing is linear. An option on a bond or a swap is
+different: its payoff involves the bond price at expiry, and that price depends on what is then known.
+
+The construction with one exercise boundary per regime and the bond at expiry equal to $A_j e^{-b x_T}$ on
+$\{y_T = j\}$ is the price when the regime is observed. It is also the price when the regime is inferred from the
+path, provided a diffusion coefficient differs between every two regimes, since the quadratic variation of $x$ then
+reveals $y$ at once. When only a drift level switches the regime is not revealed; the bond at expiry is the
+belief-weighted $\sum_j p^j_T A_j e^{-b x_T}$, and by Jensen's inequality the option is worth less than under
+observation.
+
+For two regimes the belief $p_t = \mathbb{P}(y_t = 1 \mid x_s,\ s \le t)$ follows the filter of
+\citet{wonham1965},
+\[
+  \dd p_t = \big(q_{21}(1 - p_t) - q_{12}\,p_t\big)\dd t + p_t(1 - p_t)\,\frac{a\,(b_1 - b_2)}{\sigma}\dd\nu_t,
+\]
+with $\nu$ the innovation, which also drives $\dd x_t = a(p_t b_1 + (1 - p_t)b_2 - x_t)\dd t + \sigma\dd\nu_t$. The
+pair $(x, p)$ is Markov, the bond at $(x, p)$ is known in closed form, and the option solves one equation in
+$(x, p)$ with no regime blocks. The same distinction applies to early exercise, where the observed-regime price is
+an upper bound. The library computes both, and with level-only switching the two differ by about fifteen percent
+for a one-into-five payer swaption on a chain with a two-year holding time.
+
 \paragraph{Equity with stochastic rates.}
 For an equity and a short rate driven by one chain with independent Brownian motions, the discounted
 characteristic function $\Psi(w) = \E[e^{-\int_0^T r}\,S_T^{iw}]$ factors, given the regime path, into the rates
@@ -327,8 +351,10 @@ differs by $9\times10^{-5}$, which is the rounding of \ql{}'s schedule to whole 
 
 Table~\ref{tab:orders} is the expansion with switching on: a payer swaption under a two-regime Vasicek model
 (mean levels 6\% and 2\%, volatilities 1.5\% and 0.8\%) at each order against the numerical solution of the
-reduced system, for four holding times. The error falls with the order until the asymptotic nature of the series
-shows, later for faster chains. The order at which it stops improving is the one the adaptive engine selects.
+reduced system, for four holding times. The error falls with the order at every holding time, though not
+monotonically: order three is worse than order two throughout. For the faster chains the order-six error has
+reached the tolerance of the numerical reference. The adaptive engine stops at the order where the last term
+stops shrinking.
 
 Table~\ref{tab:timings} gives timings on a laptop. For a bond, one evaluation of the series, the expansion is
 the fastest route. For a Fourier integral the numerical engine solves the reduced system for every node in a
@@ -378,8 +404,9 @@ differentiating the pricing formula.
 
 Every certificate checks the frozen limit against \ql{} and the switching case against a referee that does not
 share the method: the numerical solution of \eqref{eq:reduced} for the expansion, the coupled PDE on a grid for
-the first-order tier, Monte Carlo with exact regime paths for the grids. The frozen limit alone is not enough,
-and two blind spots fix the design. With all regimes equal, a forcing integrates to the same value in calendar
+the first-order tier, Monte Carlo with exact regime paths for the grids.
+
+The frozen limit alone is not enough, and two blind spots fix the design. With all regimes equal, a forcing integrates to the same value in calendar
 time and in time to maturity, so the frozen limit cannot detect the direction of time in a time-dependent
 forcing; with switching on, the Asian option moves by 7\% between the two. And a reversible chain has a symmetric
 Green--Kubo matrix, so only a non-reversible test chain separates the symmetric part of $K$ from the whole in a
