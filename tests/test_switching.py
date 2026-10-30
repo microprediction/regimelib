@@ -24,6 +24,7 @@ def test_vasicek_orders_converge():
     assert e[40.0][3] < 2 * e[10.0][3] * (10.0 / 40.0) ** 4 + 1e-13
 
 
+@pytest.mark.slow
 def test_heston_orders_converge():
     e = _errors(lambda c: rl.SwitchingHestonModel(c, 100.0, 0.01, 0.0, 0.04, 1.5, [0.09, 0.02], 0.4, -0.5, ), rl.VanillaOption(("call", 100.0), maturity=1.0), orders=(0, 1, 2))
     for lam in e:

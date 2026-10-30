@@ -162,6 +162,9 @@ class ExpPoly:
 
 
 # ------------------------------------------------------------------ the inner layer on the mean-zero subspace
+CLUSTER = 0.15                                                    # see SchurLayer: the widest relative cluster
+
+
 class SchurLayer:
     """Solves eta' = Q0 eta + P f, eta(0) = y0, on the subspace {v : pi.v = 0}, with P f = f - one (pi.f).
 
@@ -181,17 +184,22 @@ class SchurLayer:
         Bz = null_space(pi[None, :])                                  # orthonormal basis of the mean-zero subspace
         Tz, Uz = schur((Bz.T @ Q0 @ Bz).astype(complex), output='complex')
         dz = np.diag(Tz).copy()
-        tol = 1e-6 * max(1.0, float(np.abs(dz).max()))
-        mu = dz.copy()
-        for i in range(len(mu)):                                      # nearly equal eigenvalues share one exponent mu
-            close = np.abs(mu - mu[i]) < tol
-            mu[close] = mu[close].mean()
+        # nearly equal eigenvalues share one exponent mu. Apart, k modes at relative spacing h go through divided
+        # differences that lose about eps / h^(k-1); together, the series in delta shrinks by |delta| / |Re mu| a
+        # term. So a cluster is everything within 0.15 of its first member's decay rate (or 1e-6 of the
+        # largest eigenvalue, for rates near zero), and no member is farther than that from it
+        floor = 1e-6 * max(1.0, float(np.abs(dz).max()))
+        mu = dz.copy(); free = np.ones(len(dz), bool)
+        for i in np.argsort(-dz.real, kind="stable"):
+            if free[i]:
+                close = free & (np.abs(dz - dz[i]) < max(floor, CLUSTER * abs(dz[i].real)))
+                mu[close] = dz[close].mean(); free[close] = False
         self.mu, self.delta = mu, dz - mu                             # delta kept exactly, as a perturbation series
         self.T, self.W = Tz, Bz @ Uz                                  # eta = W z, z = W^H eta
 
     def _diag_solve(self, j, forcing, y0):
         """z' = (mu_j + delta_j) z + forcing: the terms of order delta_j^p solved in turn, all in exp(mu_j tau).
-        Each term is smaller than the last by about |delta_j| / |Re mu_j| <= 1e-6."""
+        Each term is smaller than the last by about |delta_j| / |Re mu_j|, at most about CLUSTER."""
         mu, delta = self.mu[j], self.delta[j]
         z = ExpPoly.solve(mu, forcing, y0)
         term = z
@@ -232,9 +240,8 @@ class FastSwitch:
         n = self.n = Q.shape[0]
         self.eps = eps = n / -np.trace(Q)
         Q0 = self.Q0 = eps * Q
-        w_, vl = np.linalg.eig(Q0.T)
-        pi = np.real(vl[:, np.argmin(abs(w_))])
-        self.pi = pi = pi / pi.sum()
+        from ..chain import RegimeChain
+        self.pi = pi = RegimeChain(Q0).stationaryDistribution()      # subtraction-free: nonnegative on stiff chains
         one = np.ones(n)
         self.Qs = Qs = np.linalg.inv(Q0 - np.outer(one, pi)) + np.outer(one, pi)  # group inverse
         self.g, self.N = g, order
@@ -349,23 +356,23 @@ def numerical_a(t, Q, g, dps=30, a0=None, mp_values=False):
     """a(t) for a' = (Q + diag g(t)) a, a(0) = a0 (default 1), by mpmath's Taylor-series ODE solver at dps digits.
     Returned as Python floats or complex numbers, or as mpmath numbers at full precision when mp_values is set."""
     import mpmath as mp
-    mp.mp.dps = dps
-    Qm = mp.matrix(np.asarray(Q, float).tolist())
-    n = Qm.rows
-    terms = [[(mp.mpf(a), mp.mpc(complex(c))) for a, c in gi.t.items()] for gi in g]
+    with mp.workdps(dps):                                     # the caller's precision is restored on the way out
+        Qm = mp.matrix(np.asarray(Q, float).tolist())
+        n = Qm.rows
+        terms = [[(mp.mpf(a), mp.mpc(complex(c))) for a, c in gi.t.items()] for gi in g]
 
-    def f(r, a):
-        out = []
-        for i in range(n):
-            gi = sum(c * mp.e ** (-al * r) for al, c in terms[i])
-            out.append(gi * a[i] + sum(Qm[i, j] * a[j] for j in range(n)))
-        return out
-    start = [1] * n if a0 is None else [mp.mpc(complex(v)) for v in a0]
-    vals = mp.odefun(f, 0, start)(mp.mpf(t))
-    if mp_values:
-        return vals if any(mp.im(v) for v in vals) else [mp.re(v) for v in vals]
-    out = [complex(v) for v in vals]
-    return out if any(v.imag for v in out) else [v.real for v in out]
+        def f(r, a):
+            out = []
+            for i in range(n):
+                gi = sum(c * mp.e ** (-al * r) for al, c in terms[i])
+                out.append(gi * a[i] + sum(Qm[i, j] * a[j] for j in range(n)))
+            return out
+        start = [1] * n if a0 is None else [mp.mpc(complex(v)) for v in a0]
+        vals = mp.odefun(f, 0, start)(mp.mpf(t))
+        if mp_values:
+            return vals if any(mp.im(v) for v in vals) else [mp.re(v) for v in vals]
+        out = [complex(v) for v in vals]
+        return out if any(v.imag for v in out) else [v.real for v in out]
 
 
 # ------------------------------------------------------------------ smooth functions that are not exponential sums
@@ -373,8 +380,9 @@ class Cheb:
     """A smooth function on [0, T] held as a Chebyshev series; same interface as ExpSum."""
     MAXDEG = 120
 
-    def __init__(self, series):
+    def __init__(self, series, unresolved=0.0):
         self.s = series
+        self.unresolved = unresolved         # the size of a fit's last coefficients against its largest: see fit
 
     @classmethod
     def fit(cls, f, T, deg=80):
@@ -390,7 +398,11 @@ class Cheb:
         # drop the noise-level tail: high Taylor derivatives at 0 amplify it by roughly deg^(2k)
         c = series.coef
         keep = np.nonzero(np.abs(c) > 1e-14 * np.abs(c).max())[0]
-        return cls(series.truncate(int(keep[-1]) + 1 if len(keep) else 1))
+        # coefficients that have not decayed by the last two mean a function sharper than this degree resolves (a
+        # layer near zero, say). The series is still returned; the expansion built on it would carry the error
+        # silently, so the fast engine reads this and solves from the function itself instead
+        tail = float(np.abs(c[-2:]).max() / max(np.abs(c).max(), 1e-300)) if len(c) > 2 else 0.0
+        return cls(series.truncate(int(keep[-1]) + 1 if len(keep) else 1), unresolved=tail)
 
     def _wrap(self, s):
         """Cap the degree at MAXDEG, dropping only a tail at rounding level; a larger tail raises."""
@@ -405,20 +417,23 @@ class Cheb:
             s = s.truncate(self.MAXDEG + 1)
         return Cheb(s)
 
+    def _with(self, out, o=None):
+        out.unresolved = max(self.unresolved, getattr(o, "unresolved", 0.0)); return out
+
     def __add__(self, o):
-        return self._wrap(self.s + o.s)
+        return self._with(self._wrap(self.s + o.s), o)
 
     def __sub__(self, o):
-        return self._wrap(self.s - o.s)
+        return self._with(self._wrap(self.s - o.s), o)
 
     def scale(self, c):
-        return Cheb(self.s * c)
+        return self._with(Cheb(self.s * c))
 
     def __mul__(self, o):
-        return self._wrap(self.s * o.s)
+        return self._with(self._wrap(self.s * o.s), o)
 
     def deriv(self):
-        return Cheb(self.s.deriv())
+        return self._with(Cheb(self.s.deriv()))
 
     def value(self, t):
         return self.s(t)
@@ -436,6 +451,13 @@ class Cheb:
 
 class _ComplexForcing(Exception):
     pass
+
+
+def _finished(sol, t):
+    """The state at t from an ODE solve, or an error: a solver that stopped early has not produced a(t)."""
+    if not sol.success or abs(sol.t[-1] - t) > 1e-12 * max(1.0, abs(t)):
+        raise ArithmeticError(f"the reduced system could not be integrated to t = {t}: stopped at {sol.t[-1]} ({sol.message})")
+    return sol.y[:, -1]
 
 
 def numerical_a_callable(t, Q, gfuncs, rtol=1e-12, a0=None, is_complex=None):
@@ -465,7 +487,7 @@ def numerical_a_callable(t, Q, gfuncs, rtol=1e-12, a0=None, is_complex=None):
             return gv * y + Q @ y
         a0c = a0.astype(complex)
         y0 = np.concatenate([a0c.real, a0c.imag]) if cplx else a0.real.astype(float)
-        y = solve_ivp(rhs, (0, t), y0, method='DOP853', rtol=rtol, atol=1e-14).y[:, -1]
+        y = _finished(solve_ivp(rhs, (0, t), y0, method='DOP853', rtol=rtol, atol=1e-14), t)
         return y[:n] + 1j * y[n:] if cplx else y
     if not is_complex:
         try:

@@ -6,10 +6,13 @@ import warnings
 import numpy as np
 from ._engine.fastswitch import FastSwitch, numerical_a_callable, Cheb
 Cheb.MAXDEG = 400      # products of fitted forcings (Heston, CIR) at higher orders and with several regimes need room
-from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap
+from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, ContinuousGeometricAsianOption, CreditDefaultSwap, rejectFeatures
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
+from ._engine.models import stable_B, cir_B
 from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .chain import stateIndex
+from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
 from .g2options import g2_zcb_call
 from .hybrid import SwitchingEquityRates
 
@@ -17,6 +20,85 @@ from .hybrid import SwitchingEquityRates
 def _gauss(U, n):
     x, w = np.polynomial.legendre.leggauss(n)
     return (x + 1) * U / 2, w * U / 2
+
+
+def _noDiffusion(m):
+    """None when the model diffuses or jumps. Otherwise "deterministic" if the path of the state is then known, or
+    "switching level" if a level still switches, in which case the state at a future date has atoms."""
+    parts = [m.equity, m.rates] if isinstance(m, SwitchingEquityRates) else [m]
+    answer = "deterministic"
+    for p in parts:
+        zero = lambda name: not hasattr(p, name) or np.all(np.asarray(getattr(p, name), float) == 0.0)
+        if hasattr(p, "nu"):
+            return None                                                  # pure jumps
+        if hasattr(p, "xi"):                                             # Heston with a switching vol-of-vol: the variance
+            if not (p.v0 == 0.0 and p.theta == 0.0):                     # stays at zero only from zero with a zero level
+                return None
+            continue
+        if hasattr(p, "v0"):
+            return None                                                  # stochastic variance
+        if not (zero("sigma") and zero("eta") and zero("jumpIntensity")):
+            return None
+        if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1 and p.a != 0.0:
+            answer = "switching level"
+        if hasattr(p, "k") and hasattr(p, "theta") and not hasattr(p, "S0") and len(set(p.theta)) > 1 and p.k != 0.0:
+            answer = "switching level"                                   # CIR: the level still moves the rate"
+    return answer
+
+
+def payoffNow(m, instrument):
+    """An equity option that expires now: its payoff at the spot, with the one-sided greeks of that payoff."""
+    K, S0 = instrument.strike, m.S0
+    value = float(instrument.payoffOnGrid([S0])[0])
+    if instrument.payoffType != "vanilla":
+        return {"value": value}
+    side = 1.0 if instrument.isCall else -1.0                            # delta is one-sided; at the strike it is the midpoint
+    inside = 1.0 if side * (S0 - K) > 0 else (0.5 if S0 == K else 0.0)
+    theta = side * inside * (getattr(m, "q", 0.0) * S0 - (m.r if m.r is not None else m.rates.r0) * K)
+    novega = {"vega": 0.0} if hasattr(m, "v0") else {}                   # a payoff does not depend on v0
+    return dict({"value": value, "delta": side * inside, "gamma": 0.0, "theta": theta, "rho": 0.0}, **novega)
+
+
+def deterministicEquity(m, instrument):
+    """The value of an equity contract when the price path is known, S_t = S0 e^{(r - q) t}: the discounted payoff,
+    the best exercise date for an American option, and for a barrier whether and when the path crosses it."""
+    from .instruments import BarrierOption
+    T, S0, mu = instrument.maturity, m.S0, m.r - m.q
+    path = lambda t: S0 * math.exp(mu * t)
+    pay = lambda t: math.exp(-m.r * t) * float(instrument.payoffOnGrid([path(t)])[0])
+    if isinstance(instrument, BarrierOption):
+        if getattr(instrument, "isAmerican", False):
+            raise NotImplementedError("an American barrier option on a deterministic path is not priced")
+        b, up = instrument.barrier, instrument.isUp
+        if (up and S0 >= b) or (not up and S0 <= b):
+            raise ValueError("the spot is beyond the barrier")
+        crosses = mu != 0.0 and ((up and path(T) >= b) or (not up and path(T) <= b))
+        if instrument.isKnockOut:                                        # the rebate is paid at the crossing
+            return math.exp(-m.r * math.log(b / S0) / mu) * instrument.rebate if crosses else pay(T)
+        return pay(T) if crosses else math.exp(-m.r * T) * instrument.rebate
+    if getattr(instrument, "isAmerican", False):
+        return max(pay(t) for t in np.linspace(getattr(instrument, "earliestExercise", 0.0), T, 4001))
+    return pay(T)
+
+
+def _atoms(what):
+    return NotImplementedError(
+        f"{what} with zero volatility and a switching level: the rate at expiry takes values with positive probability, "
+        "which the Fourier inversion does not resolve. Give the rate a volatility, or freeze the level.")
+
+
+def _expansionOrder(value, name, allowNone=False):
+    """An expansion order is a nonnegative integer (or None for the adaptive order)."""
+    import numbers
+    if value is None and allowNone:
+        return None
+    if isinstance(value, bool) or not isinstance(value, numbers.Integral) or value < 0:
+        raise ValueError(f"{name} must be {'None or ' if allowNone else ''}a non-negative integer, got {value!r}")
+    return int(value)
+
+
+class IntensityWarning(UserWarning):
+    """A default intensity model has produced a survival probability above one."""
 
 
 class ExpansionWarning(UserWarning):
@@ -38,8 +120,9 @@ def _constantValue(gi):
 class SwitchingEngine:
     supportsResults = True
 
-    def __init__(self, model, regime=0, nodes=96):
-        self.model, self.regime, self.nodes = model, regime, nodes
+    def __init__(self, model, regime=0, nodes=96, information="inferred"):
+        self.model, self.nodes, self.information = model, nodes, checkInformation(information)
+        self.regime, self.belief = startingBelief(regime, model.n)      # a regime index, or a belief over the regimes
         self._memo = {}                                       # (fingerprint, T, u) -> terminal data, shared across strikes
 
     def _fingerprint(self):
@@ -60,29 +143,100 @@ class SwitchingEngine:
 
     def _terminal(self, T, u, stoch):
         """Memoised a(T), its derivative, the prefactor and (for stochastic volatility) the Riccati D, D' at z = u - i/2."""
-        key = (self._fingerprint(), T, u)
+        key = (self._fingerprint(), T, u) + self._cacheKey()
         hit = self._memo.get(key)
         if hit is None:
             m = self.model; z = u - 0.5j
             g, gfuncs, pre = m.returnForcing(z, T)
-            avec, dvec = self._aVector(g, gfuncs, T)
-            hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None)
+            before = self._diagnosticsNow()
+            self._node = abs(u)                                          # the frequency, for an engine that keeps track
+            try:
+                avec, dvec = self._aVector(g, gfuncs, T)
+            finally:
+                self._node = None
+            hit = (avec, dvec, pre(), self._riccatiD(m, z, T) if stoch else None, self._diagnosticsSince(before))
             if len(self._memo) > 20000:
                 self._memo.clear()
             self._memo[key] = hit
-        return hit
+        else:
+            self._diagnosticsReplay(hit[4])                              # a reused node still counts in this calculation
+        return hit[:4]
+
+    # what a cached terminal vector depends on beyond the model, the maturity and the frequency; and the diagnostics
+    # its computation contributed, so that a calculation served from the cache reports the same as a fresh one
+    def _cacheKey(self):
+        return ()
+
+    def _diagnosticsNow(self):
+        return None
+
+    def _diagnosticsSince(self, before):
+        return None
+
+    def _diagnosticsReplay(self, contribution):
+        pass
+
+    def _solver(self):
+        """How the bond-option integrators expand at a node: a function returning a(t), or None where the series
+        has blown up. Their quadrature refines until two rules agree, which needs one smooth integrand, so on a None
+        they solve every node numerically. None here: they expand without that test."""
+        return None
 
     # a(T) for the reduced system; subclasses choose the method
     def _a(self, g, gfuncs, T, a0=None):
         raise NotImplementedError
 
     def calculate(self, instrument, results=False):
+        now = self._expiringUnderBelief(instrument)
+        if now is not None:
+            return now if results else now["value"]
+        return self._calculate(instrument, results)
+
+    def _expiringUnderBelief(self, instrument):
+        """An option on a bond that expires now, held with a belief about a regime the path does not reveal: the
+        holder exercises on the belief-weighted bond, so the payoff is applied after the average, not before."""
+        if (getattr(self, "belief", None) is None or self.information != "inferred" or instrument.maturity != 0
+                or not isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption))
+                or regimeIsKnown(self.model)):
+            return None
+        if isinstance(instrument, ZeroCouponBondOption):
+            isCall, K, flows = instrument.isCall, instrument.strike, [(instrument.bondMaturity, 1.0)]
+        elif isinstance(instrument, CouponBondOption):
+            isCall, K, flows = instrument.isCall, instrument.strike, instrument.cashflows
+        else:
+            isCall, K, flows = not instrument.isPayer, instrument.notional, instrument.cashflows
+        value = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in flows) - K
+        return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+
+    @byBelief()
+    def _calculate(self, instrument, results=False):
         m, T = self.model, instrument.maturity
+        hidden = (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
+                  and self.information == "inferred" and not regimeIsKnown(m))
+        if hidden and isinstance(instrument, CapFloor):
+            raise notRevealed("the price of an option on a bond or a swap")   # one exercise boundary per regime below
+        if isinstance(instrument, VanillaOption):                       # the transforms below are of the terminal value
+            rejectFeatures(instrument, "the characteristic-function engine", ("American exercise", "a barrier"),
+                           "SwitchingFDEngine")
+        if isinstance(instrument, Swaption) and instrument.exerciseTimes is not None and (
+                len(instrument.exerciseTimes) > 1 or abs(instrument.exerciseTimes[0] - T) > 1e-12):
+            raise TypeError("the characteristic-function engine prices European swaptions; "
+                            "use SwitchingFDEngine for Bermudan exercise")
+        if (isinstance(instrument, (ZeroCouponBondOption, CouponBondOption, Swaption, CapFloor))
+                and len(m.chain.closedClasses()) > 1):
+            # their Fourier range and quadrature are sized from the stationary law, and this chain has several
+            raise NotImplementedError("options on bonds and swaps are not priced by the transform engines on a chain "
+                                      f"with {len(m.chain.closedClasses())} closed classes; use SwitchingFDEngine")
+        exact = self._exactAtTheEnds(instrument)                        # zero maturity, nonpositive strike
+        if exact is not None:
+            return exact if results else exact["value"]
+        if hidden:                                                      # the ends above need no exercise boundary
+            raise notRevealed("the price of an option on a bond or a swap")   # one exercise boundary per regime below
         if isinstance(instrument, ZeroCouponBond):
             g, gfuncs, pre = m.bondForcing(T)
             a0 = None
             if instrument.regimeAtMaturity is not None:
-                a0 = np.zeros(m.n); a0[instrument.regimeAtMaturity] = 1.0
+                a0 = np.zeros(m.n); a0[stateIndex(instrument.regimeAtMaturity, m.n, "regimeAtMaturity")] = 1.0
             P = float(np.real(pre(T) * self._a(g, gfuncs, T, a0)))
             out = {"value": P}
             B = self._bondB(T)
@@ -97,11 +251,9 @@ class SwitchingEngine:
         elif isinstance(instrument, VanillaOption):
             out = self._digital(instrument) if instrument.payoffType != "vanilla" else self._vanillaAll(instrument)
         elif isinstance(instrument, CouponBond):
-            out = {"value": 0.0, "delta": 0.0, "gamma": 0.0}
-            for t, c in instrument.cashflows:
-                r = self.calculate(ZeroCouponBond(t), results=True)
-                for key in out:
-                    out[key] += c * r.get(key, math.nan)
+            parts = [(c, self.calculate(ZeroCouponBond(t), results=True)) for t, c in instrument.cashflows]
+            keys = set.intersection(*(set(r) for _, r in parts))          # only what every zero-coupon bond provides
+            out = {key: sum(c * r[key] for c, r in parts) for key in ("value", "delta", "gamma") if key in keys}
         elif isinstance(instrument, ZeroCouponBondOption):
             out = {"value": self._bondOption(instrument)}
         elif isinstance(instrument, CouponBondOption):
@@ -111,78 +263,189 @@ class SwitchingEngine:
         elif isinstance(instrument, CapFloor):
             v = 0.0
             for T0, T1 in zip(instrument.times[:-1], instrument.times[1:]):
-                tau = T1 - T0; kb = 1.0 / (1.0 + tau * instrument.strike)
-                o = ZeroCouponBondOption("put" if instrument.isCap else "call", kb, T0, T1)
-                v += instrument.notional * (1.0 + tau * instrument.strike) * self._bondOption(o)
+                tau = T1 - T0; A = 1.0 + tau * instrument.strike
+                if A > 0:                                                # caplet = A puts on the bond struck at 1 / A
+                    o = ZeroCouponBondOption("put" if instrument.isCap else "call", 1.0 / A, T0, T1)
+                    v += instrument.notional * A * self.calculate(o)
+                elif instrument.isCap:                                   # 1 - A P(T0, T1) > 0 always: no optionality
+                    v += instrument.notional * (self.calculate(ZeroCouponBond(T0)) - A * self.calculate(ZeroCouponBond(T1)))
             out = {"value": v}
         else:
             raise TypeError("unsupported instrument")
         return out if results else out["value"]
 
+    def _exactAtTheEnds(self, instrument):
+        """Values that need no transform: at zero maturity a claim is worth its payoff, and a strike at or below
+        zero removes the optionality of a claim on a positive price. Returning them here keeps the logarithms and
+        variances of the inversion formulas away from the ends of their domain."""
+        m, T = self.model, instrument.maturity
+        if not math.isfinite(T) or T < 0:
+            raise ValueError(f"the maturity must be finite and nonnegative, got {T}")
+        bond = lambda t: 1.0 if t == 0 else self.calculate(ZeroCouponBond(t))
+        still = _noDiffusion(m)                                          # None, "deterministic" or "switching level"
+        if isinstance(instrument, ZeroCouponBond):
+            if T > 0:
+                return None
+            j = instrument.regimeAtMaturity                              # no time has passed: the regime is the starting one
+            paid = j is None or stateIndex(j, m.n, "regimeAtMaturity") == self.regime
+            return {"value": 1.0 if paid else 0.0, "delta": 0.0, "gamma": 0.0}
+        if isinstance(instrument, ZeroCouponBondOption):
+            K, S = instrument.strike, instrument.bondMaturity
+            if T == 0:
+                return {"value": max(bond(S) - K, 0.0) if instrument.isCall else max(K - bond(S), 0.0)}
+            if K <= 0:
+                return {"value": bond(S) - K * bond(T) if instrument.isCall else 0.0}
+            if still == "deterministic":                                 # P(T, S) = P(0, S) / P(0, T) is known today
+                value = bond(S) - K * bond(T)
+                return {"value": max(value, 0.0) if instrument.isCall else max(-value, 0.0)}
+            if still:
+                raise _atoms("an option on a bond")
+            return None
+        if isinstance(instrument, (CouponBondOption, Swaption)):
+            isCall, K = ((instrument.isCall, instrument.strike) if isinstance(instrument, CouponBondOption)
+                         else (not instrument.isPayer, instrument.notional))
+            if T == 0 or (K <= 0 and all(c >= 0 for _, c in instrument.cashflows)):
+                value = sum(c * bond(S) for S, c in instrument.cashflows) - K * bond(T)
+                if T == 0:
+                    return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+                return {"value": value if isCall else 0.0}
+            if still == "deterministic":
+                value = sum(c * bond(S) for S, c in instrument.cashflows) - K * bond(T)
+                return {"value": max(value, 0.0) if isCall else max(-value, 0.0)}
+            if still:
+                raise _atoms("an option on a coupon bond or a swap")
+            return None
+        if not isinstance(instrument, VanillaOption):
+            return None
+        K, S0, call = instrument.strike, m.S0, instrument.isCall
+        novega = {"vega": 0.0} if hasattr(m, "v0") else {}               # a payoff or a forward does not depend on v0
+        if isinstance(instrument, ContinuousGeometricAsianOption):
+            if T == 0:                                                   # the average of a single point
+                return {"value": float(instrument.payoffOnGrid([S0])[0])}
+            if still == "deterministic" and K > 0:                       # log S is linear in t: its average is at T / 2
+                G = S0 * math.exp((m.r - m.q) * T / 2)
+                return {"value": math.exp(-m.r * T) * float(instrument.payoffOnGrid([G])[0])}
+            return None                                                  # a nonpositive strike is handled with the forward of the average
+        if T == 0:
+            return payoffNow(m, instrument)
+        if K <= 0:                                                       # S_T > 0 >= K: the call is a forward, the put is void
+            if isinstance(m, SwitchingEquityRates):
+                if not call:
+                    return {"value": 0.0}
+                if instrument.payoffType == "cash":                      # paid for certain: the cash times the bond
+                    return {"value": instrument.cash * self._hybridBond(T)}
+                if instrument.payoffType == "asset":
+                    return {"value": S0 * math.exp(-m.q * T)}
+                return {"value": S0 * math.exp(-m.q * T) - K * self._hybridBond(T)}
+            dq, dr = math.exp(-m.q * T), math.exp(-m.r * T)
+            if instrument.payoffType == "cash":
+                return {"value": dr * instrument.cash if call else 0.0}
+            if instrument.payoffType == "asset":
+                return {"value": S0 * dq if call else 0.0}
+            if not call:
+                return dict({"value": 0.0, "delta": 0.0, "gamma": 0.0, "theta": 0.0, "rho": 0.0}, **novega)
+            return dict({"value": S0 * dq - K * dr, "delta": dq, "gamma": 0.0, "theta": m.q * S0 * dq - m.r * K * dr,
+                         "rho": T * K * dr}, **novega)
+        if still == "deterministic":                                     # the terminal price is known: discounted payoff
+            if isinstance(m, SwitchingEquityRates):                      # S_T = S0 e^{-qT} / P(0, T)
+                P = self._hybridBond(T); value = S0 * math.exp(-m.q * T) - K * P
+                if instrument.payoffType != "vanilla":
+                    return {"value": P * float(instrument.payoffOnGrid([S0 * math.exp(-m.q * T) / P])[0])}
+                return {"value": max(value, 0.0) if call else max(-value, 0.0)}
+            dq, dr = math.exp(-m.q * T), math.exp(-m.r * T); F = m.forward(T)
+            if instrument.payoffType != "vanilla":
+                return {"value": dr * float(instrument.payoffOnGrid([F])[0])}
+            side = 1.0 if call else -1.0
+            inside = 1.0 if side * (F - K) > 0 else (0.5 if F == K else 0.0)
+            return {"value": max(side * (S0 * dq - K * dr), 0.0), "delta": side * inside * dq, "gamma": 0.0,
+                    "theta": side * inside * (m.q * S0 * dq - m.r * K * dr), "rho": side * inside * T * K * dr}
+        return None
+
+    def _hybridBond(self, T):
+        """E exp(-int_0^T r) from the starting regime, under the equity-with-rates model."""
+        g, gfuncs, factor = self.model.discountedForcing(0.0, T)
+        return float(np.real(factor * self._aVector(g, gfuncs, T)[0][self.regime]))
+
     def _bondB(self, T):
         m = self.model
         if isinstance(m, SwitchingVasicek) or hasattr(m, "jumpMean"):
-            return (1 - math.exp(-m.a * T)) / m.a
+            return stable_B(m.a, T)
         if hasattr(m, "k") and hasattr(m, "theta") and not hasattr(m, "S0"):      # CIR
-            h = math.sqrt(m.k ** 2 + 2 * m.sigma ** 2); ex = math.exp(h * T) - 1
-            return 2 * ex / ((h + m.k) * ex + 2 * h)
+            return cir_B(m.k, m.sigma, T)
         return None
 
     def _bondOption(self, opt):
         m = self.model; T, S, K = opt.maturity, opt.bondMaturity, opt.strike
         if isinstance(m, SwitchingVasicek):
-            call = zcb_call(T, S, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+            call = zcb_call(T, S, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingHullWhite):
             # r = x + phi(t): P(T, S) = c P_x(T, S) with c = exp(-int_T^S phi), and the discount to T carries
             # exp(-int_0^T phi), so the call is exp(-int_0^T phi) c Call_x(strike K / c) under the zero-mean factor.
-            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
-            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T)); c = m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))
-            call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+            call = e0T * c * zcb_call(T, S, K / c, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingG2):
             e0T, c = m.deterministicDiscount(0.0, T), m.deterministicDiscount(T, S)
-            call = e0T * c * g2_zcb_call(T, S, K / c, self.regime, m.a, m.b, m.sigma, m.eta, m.rho, m.chain.generator, order=self._order())
+            call = e0T * c * g2_zcb_call(T, S, K / c, self.regime, m.a, m.b, m.sigma, m.eta, m.rho, m.chain.generator, order=self._order(), solve=self._solver())
         else:
             raise TypeError("bond options are priced under SwitchingVasicek, SwitchingHullWhite or SwitchingG2")
         if opt.isCall:
             return call
         bond = lambda t: self.calculate(ZeroCouponBond(t))          # put-call parity: C - P = P(0,S) - K P(0,T)
-        return call - bond(S) + K * bond(T)
+        return max(call - bond(S) + K * bond(T), 0.0)               # rounding in the parity, when the put is worthless
 
     def _couponBondOption(self, isCall, K, T, cashflows):
         """Under Hull-White the deterministic curve factor scales each cash flow: c_k -> c_k D(S_k)/D(T) e^{-(shift(S_k) - shift(T))}
         in the zero-mean factor model, and the discount to expiry carries exp(-int_0^T phi)."""
         m = self.model
         if isinstance(m, SwitchingVasicek):
-            call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order())
+            call = coupon_bond_call(T, cashflows, K, m.r0, self.regime, m.a, m.b, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         elif isinstance(m, SwitchingHullWhite):
-            a = m.a; pi = m.chain.stationaryDistribution(); s2 = float(pi @ np.asarray(m.sigma) ** 2)
-            shift = lambda t: s2 / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+            a = m.a; shift = m._intShift
             e0T = m.discount(T) * math.exp(-shift(T))
             scaled = [(S, c * m.discount(S) / m.discount(T) * math.exp(-(shift(S) - shift(T)))) for S, c in cashflows]
-            call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order())
+            call = e0T * coupon_bond_call(T, scaled, K, 0.0, self.regime, a, [0.0] * m.n, m.sigma, m.chain.generator, order=self._order(), solve=self._solver())
         else:
             raise TypeError("coupon-bond options, swaptions and caps are priced under SwitchingVasicek or SwitchingHullWhite")
         if isCall:
             return call
         bond = sum(c * self.calculate(ZeroCouponBond(S)) for S, c in cashflows)       # parity: C - P = bond - K P(0,T)
-        return call - bond + K * self.calculate(ZeroCouponBond(T))
+        return max(call - bond + K * self.calculate(ZeroCouponBond(T)), 0.0)
 
     def _cds(self, cds):
         """Survival Q(t) is the model's bond price; premium leg = s sum tau_i D(t_i) Q(t_i) (+ accrual to the mid-point
         on default), protection = (1 - R) sum D(t_mid) (Q(t_{i-1}) - Q(t_i))."""
-        Q = lambda t: 1.0 if t <= 0 else self.calculate(ZeroCouponBond(t))
-        D = cds.discount; prem = prot = 0.0; t0 = 0.0
+        known = {}                                                   # each date ends one period and starts the next
+        def Q(t):
+            if t <= 0:
+                return 1.0
+            if t not in known:
+                known[t] = self._survival(t)
+            return known[t]
+        D = cds.discount; annuity = prot = 0.0; t0 = 0.0            # the annuity is the premium leg per unit spread
         for t1 in cds.times:
             tau = t1 - t0; tm = 0.5 * (t0 + t1); q0, q1 = Q(t0), Q(t1)
-            prem += cds.spread * tau * D(t1) * q1
+            annuity += tau * D(t1) * q1
             if cds.accrualOnDefault:
-                prem += cds.spread * 0.5 * tau * D(tm) * (q0 - q1)
+                annuity += 0.5 * tau * D(tm) * (q0 - q1)
             prot += (1.0 - cds.recovery) * D(tm) * (q0 - q1)
             t0 = t1
+        if annuity == 0.0:
+            raise ValueError("the premium annuity is zero, so the fair spread is undefined")
+        prem = cds.spread * annuity
         sign = 1.0 if cds.isBuyer else -1.0
         return {"value": sign * (prot - prem), "couponLegNPV": -sign * prem, "defaultLegNPV": sign * prot,
-                "fairSpread": cds.spread * prot / prem}
+                "fairSpread": prot / annuity, "protection": prot, "annuity": annuity}
+
+    def _survival(self, t):
+        """The model's bond read as a survival probability. A Gaussian intensity (Vasicek) can be negative, so the
+        value can exceed one at high volatility or long horizons; that is reported, not hidden."""
+        q = self.calculate(ZeroCouponBond(t))
+        if q > 1.0 + 1e-12:
+            warnings.warn(f"the survival probability to t = {t:g} is {q:.6g}, above one: a Gaussian (Vasicek) intensity is "
+                          "negative with positive probability, and at these parameters that matters. Use a "
+                          "Cox-Ingersoll-Ross intensity or a lower volatility.", IntensityWarning, stacklevel=5)
+        return q
 
     def _hybridVanilla(self, opt):
         """Lewis's formula with the discounted characteristic function (regimelib.hybrid); the put by parity with the
@@ -190,19 +453,36 @@ class SwitchingEngine:
         m, T, K = self.model, opt.maturity, opt.strike
         if opt.payoffType != "vanilla":
             raise TypeError("digitals are not priced under the hybrid model")
+        def still(p):
+            """No diffusion in the starting regime (a Black-Scholes equity, or a rate with a volatility)."""
+            if hasattr(p, "v0") or not hasattr(p, "sigma"):
+                return False
+            return float(np.broadcast_to(np.asarray(p.sigma, float), (m.n,))[self.regime]) == 0.0
+        if still(m.equity) and still(m.rates) and _noDiffusion(m) != "deterministic":
+            # until the chain first leaves this regime the price moves deterministically, and it may never leave
+            raise ArithmeticError("neither the equity nor the rate diffuses in the starting regime, so the terminal price "
+                                  "has an atom (the path that stays in it), which the Fourier inversion does not resolve. "
+                                  "Give the regime a volatility.")
         def psi(w):
             g, gfuncs, factor = m.discountedForcing(w, T)
             return factor * self._aVector(g, gfuncs, T)[0][self.regime]
         U = 8.0
         while abs(psi(U - 0.5j)) > 1e-14 * K ** 0.5 and U < 1e4:
             U *= 2
-        k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(m.S0 / K)))
+        left = abs(psi(U - 0.5j))
+        if left > 1e-7 * U * K ** 0.5:                                         # what the cutoff drops, against the strike
+            raise ArithmeticError(f"the characteristic function is still {left:.2g} at u = {U:g}, the largest frequency "
+                                  "integrated: the terminal price has an atom (no diffusion from this regime, with a "
+                                  "positive chance of staying in it) or a density too peaked to invert. The transform "
+                                  "engines do not price this; give the regime a volatility.")
+        bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
+        # the integrand oscillates at the forward's moneyness, and the forward carries the dividends and the bond
+        forward = m.S0 * math.exp(-m.q * T) / bond
+        k = math.log(K); us, ws = _gauss(U, self._nodeCount(U, math.log(forward / K)))
         I0 = sum(w * (cmath.exp(-1j * u * k) * psi(u - 0.5j)).real / (u * u + 0.25) for u, w in zip(us, ws))
         call = m.S0 * math.exp(-m.q * T) - math.sqrt(K) / math.pi * I0
-        if opt.isCall:
-            return {"value": call}
-        bond = psi(0.0).real                                                    # E exp(-int r) from the starting regime
-        return {"value": call - m.S0 * math.exp(-m.q * T) + K * bond}
+        floor = m.S0 * math.exp(-m.q * T) - K * bond
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _geometricAsian(self, opt):
         """Lewis's formula on the geometric average G = S0 exp(Y): the forward is F_G = S0 phi_Y(-i) and the
@@ -213,16 +493,27 @@ class SwitchingEngine:
         def phiY(z):
             g, gfuncs = m.averageForcing(z, T)
             return self._aVector(g, gfuncs, T)[0][self.regime]
-        FG = m.S0 * phiY(-1j).real; k = math.log(FG / K); lf = math.log(FG / m.S0)
-        U = self._frequencyLimit(T, k); us, ws = _gauss(U, self._nodeCount(U, k))
+        FG = m.S0 * phiY(-1j).real
+        if K <= 0:                                                       # the average is positive: a forward, or nothing
+            return {"value": math.exp(-m.r * T) * (FG - K) if opt.isCall else 0.0}
+        k = math.log(FG / K); lf = math.log(FG / m.S0)
+        # the average is narrower than the terminal value, so its transform decays more slowly: size the range from it
+        def size(u):
+            g, gfuncs = m.averageForcing(u - 0.5j, T)
+            return abs(_numericalAVector(m.chain.generator, g, gfuncs, T, 1e-10)[self.regime] * cmath.exp(-1j * (u - 0.5j) * lf))
+        U = self._frequencyLimit(T, k)
+        while U < 1e4 and size(U) > 1e-12:
+            U *= 2
+        us, ws = _gauss(U, self._nodeCount(U, k))
         I0 = 0.0
         for u, w in zip(us, ws):
             z = u - 0.5j
             e = cmath.exp(1j * u * k) * phiY(z) * cmath.exp(-1j * z * lf)
             I0 += w * e.real / (u * u + 0.25)
         disc = math.exp(-m.r * T)
-        call = disc * (FG - math.sqrt(FG * K) / math.pi * I0)
-        return {"value": call if opt.isCall else call - disc * (FG - K)}
+        call = disc * (FG - math.sqrt(FG) * math.sqrt(K) / math.pi * I0)     # not sqrt(FG K), which can overflow
+        floor = disc * (FG - K)
+        return {"value": max(call, floor, 0.0) if opt.isCall else max(call - floor, -floor, 0.0)}
 
     def _order(self):
         return None
@@ -255,10 +546,10 @@ class SwitchingEngine:
             else:
                 dphi = prev * dvec[self.regime]
             It += w * (cmath.exp(1j * u * k) * ((0.5 + 1j * u) * mu * phi + dphi)).real / (u * u + 0.25)
-        disc = math.exp(-m.r * T); root = math.sqrt(F * K)
+        disc = math.exp(-m.r * T); root = math.sqrt(F) * math.sqrt(K)      # not sqrt(F K): the product can overflow
         call = disc * (F - root / math.pi * I0)
         delta = disc * dF * (1 - root / (math.pi * F) * I1)
-        gamma = disc * dF * dF * root / (math.pi * F * F) * I2
+        gamma = disc * (dF / F) * root / math.pi * I2 * (dF / F)    # in this order: neither F^2 nor 1 / F^2 is formed
         dC_dT = -m.r * call + disc * (mu * F - root / math.pi * It)
         rho = -T * call + disc * T * (F - root / math.pi * I1)
         out = dict(value=call, delta=delta, gamma=gamma, theta=-dC_dT, rho=rho)
@@ -268,6 +559,12 @@ class SwitchingEngine:
             out["value"] = call - disc * (F - K); out["delta"] = delta - disc * dF
             out["theta"] = -(dC_dT - (-m.r * disc * (F - K) + disc * mu * F))
             out["rho"] = rho - T * K * disc
+        if getattr(self, "_left", 0.0) > 1e-2:
+            # gamma's integrand is the transform itself, with no 1 / u^2: where that has not decayed the density at the
+            # strike is not resolved (it may be infinite), and a number here would be the truncation
+            del out["gamma"]
+        # the absolute error of the integral is all that is left of a value far out of the money
+        out["value"] = max(out["value"], disc * (F - K) * (1.0 if opt.isCall else -1.0), 0.0)
         return out
 
     def _aVector(self, g, gfuncs, T, a0=None):
@@ -286,7 +583,7 @@ class SwitchingEngine:
             g, gfuncs, pre = m.returnForcing(u + shift, T)
             phi = pre() * self._a(g, gfuncs, T)
             I += w * (cmath.exp(-1j * u * k) * phi / (1j * u)).real
-        prob = 0.5 + I / math.pi                              # P(S_T > K) under the relevant measure
+        prob = min(max(0.5 + I / math.pi, 0.0), 1.0)          # P(S_T > K) under the relevant measure
         if opt.payoffType == "cash":
             value = disc * opt.cash * (prob if opt.isCall else 1 - prob)
         else:
@@ -297,6 +594,9 @@ class SwitchingEngine:
     def _riccatiD(m, u, T):
         """The regime-free coefficient of v0 in the log characteristic function (Heston, Bates) and its T-derivative
         from the Riccati equation D' = xi^2 D^2 / 2 + (rho xi i u - kappa) D - (u^2 + i u) / 2."""
+        if m.sigma == 0.0:                                               # the variance is deterministic: D' = -kappa D - (u^2 + iu)/2
+            D = -0.5 * (u * u + 1j * u) * stable_B(m.kappa, T)
+            return D, -m.kappa * D - 0.5 * (u * u + 1j * u)
         d = cmath.sqrt((m.rho * m.sigma * 1j * u - m.kappa) ** 2 + m.sigma ** 2 * (1j * u + u * u))
         gm = (m.kappa - m.rho * m.sigma * 1j * u - d) / (m.kappa - m.rho * m.sigma * 1j * u + d)
         e = cmath.exp(-d * T)
@@ -321,6 +621,22 @@ class SwitchingEngine:
         U = 8.0
         while size(U) > 1e-14 and U < 1e4:
             U *= 2
+        # the averaged model bounds a chain that mixes within the maturity. From a regime of low volatility that the
+        # chain may not leave, the transform decays more slowly than the average: follow the one being inverted
+        Q = m.chain.generator
+        def actual(u):
+            g, gfuncs, pre = m.returnForcing(u - 0.5j, T)
+            return abs(pre() * _numericalAVector(Q, g, gfuncs, T, 1e-10)[self.regime])
+        while m.n > 1 and U < 1e4 and actual(U) > 1e-12:
+            U *= 2
+        left = max(size(U), actual(U) if m.n > 1 else 0.0)
+        if left > 1e-7 * U:
+            # the price integrand is the transform over u^2, so what is cut off is about left / U of the spot
+            raise ArithmeticError(f"the characteristic function is still {left:.2g} at u = {U:g}, the largest frequency "
+                                  "integrated: the law has an atom (jumps with no diffusion in some regime) or a density "
+                                  "too peaked to invert (a very small volatility, or a variance-gamma maturity far below "
+                                  "nu). The transform engines do not price this; give the regime a volatility.")
+        self._left = left * U                                    # of the undamped integrals (gamma), what is cut off
         return U
 
     def _nodeCount(self, U, k):
@@ -333,55 +649,171 @@ class FastSwitchingEngine(SwitchingEngine):
     """order: an integer, or None to add terms until successive orders agree to `tol` (relative) or the next term
     stops shrinking, the best truncation of an asymptotic series. `maxOrder` bounds the search. After calculate(),
     `orderUsed` and `lastIncrement` (relative size of the last term kept) are set."""
-    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12):
-        super().__init__(model, regime, nodes)
+    def __init__(self, model, order=4, regime=0, nodes=96, tol=1e-10, maxOrder=12, rtol=1e-12, information="inferred"):
+        super().__init__(model, regime, nodes, information)
+        if len(model.chain.closedClasses()) > 1:
+            raise ValueError("the fast-switching expansion needs a chain with one stationary law; this one has "
+                             f"{len(model.chain.closedClasses())} closed classes. Use NumericalSwitchingEngine.")
+        if model.n > 2:
+            rates = np.sort(np.abs(np.linalg.eigvals(model.chain.generator)))      # rates[0] is the stationary law's zero
+            if rates[1] < 1e-6 * rates[-1]:
+                raise ValueError("the fast-switching expansion is in the mean holding time, and this chain also has a mode "
+                                 f"that relaxes at rate {rates[1]:.3g} against a fastest of {rates[-1]:.3g}: it switches "
+                                 "fast within groups of regimes and slowly between them. Use NumericalSwitchingEngine.")
+        order, maxOrder = (_expansionOrder(order, "order", allowNone=True), _expansionOrder(maxOrder, "maxOrder"))
         self.order, self.tol, self.maxOrder, self.rtol = order, tol, maxOrder, rtol
         self.orderUsed = self.lastIncrement = None
 
-    def _aVector(self, g, gfuncs, T, a0=None):
+    def _aVector(self, g, gfuncs, T, a0=None, fallback=True):
         """a(T) over all regimes through the engine's order, with the size of the last two terms recorded for the
         convergence diagnostics. The series is asymptotic in the holding time times the forcing, so at Fourier nodes
         where the forcing is large it diverges (non-finite, far from the averaged value, or a last term no smaller than
         the one before): there the reduced system is solved numerically instead and `numericalNodes` counts them."""
         N = self._order()
         Q = self.model.chain.generator
-        fs = FastSwitch(Q, g, order=N, a0=a0)
-        base = np.asarray(fs.a(T, 0), complex)
+        if self.model.n == 1:                                            # nothing to expand in: a = a0 exp(int g)
+            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+            return avec, Q @ avec + np.array([gi.value(T) for gi in g], complex) * avec
+        failures = (OverflowError, FloatingPointError, ValueError, ZeroDivisionError, np.linalg.LinAlgError)
+        # a terminal vector nearly orthogonal to the stationary law (a payoff in a rare regime) is expanded as the
+        # difference of two solutions near one, which loses it: solve instead
+        rare = a0 is not None and abs(self.model.chain.stationaryDistribution() @ np.asarray(a0)) < 1e-6 * np.max(np.abs(a0))
+        base = np.ones(self.model.n, complex); later = None
+        # the series diverges where the forcing is large, which for a transform is above some frequency. Once three
+        # nodes in a row have diverged at a maturity, the nodes above them are solved without trying the series first
+        u = getattr(self, "_node", None) if a0 is None and fallback else None
+        cuts = self._diag.setdefault("cuts", {})
+        above = u is not None and T in cuts and u >= cuts[T][0]
         with np.errstate(all="ignore"):
             try:
-                avec = np.asarray(fs.a(T, N), complex)
-                prev = np.asarray(fs.a(T, N - 1), complex) if N >= 1 else base
-                prev2 = np.asarray(fs.a(T, N - 2), complex) if N >= 2 else prev
-            except (OverflowError, FloatingPointError, ValueError):
-                avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base
+                if above:
+                    base = base * cuts[T][1]; raise ValueError
+                if rare or any(getattr(gi, "unresolved", 0.0) > 1e-9 for gi in g):   # or a forcing its series misses
+                    raise ValueError
+                fs = FastSwitch(Q, g, order=N + 1, a0=a0)
+                base = np.asarray(fs.a(T, 0), complex)
+                sums = [base] + [np.asarray(fs.a(T, k), complex) for k in range(1, N + 1)]     # every truncation up to N
+                avec = sums[-1]
+                prev = sums[-2] if N >= 1 else base
+                prev2 = sums[-3] if N >= 2 else prev
+            except failures:
+                avec = np.full(self.model.n, np.nan, complex); prev = prev2 = base; sums = [base]
+            else:
+                try:
+                    later = np.asarray(fs.a(T, N + 1), complex)
+                except failures:
+                    later = None
         i = self.regime
         finite = np.all(np.isfinite(avec)) and not np.any(np.abs(avec) > 1e3 * np.maximum(np.abs(base), 1e-300))
+        # terms that overflow in the exponent underflow the value to zero, order after order, and then agree: not agreement
+        finite = finite and not (abs(base[i]) > 1e-300 and abs(avec[i]) < 1e-3 * abs(base[i]))
+        self._diag["nodes"] += 1
         matters = abs(base[i]) > 1e-8 * self._diag.get("phiScale", 1.0)
         if finite:
             scale = max(abs(avec[i]), 1e-300)
-            last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
-            diverging = N >= 2 and last >= before and last > 1e-12
+            with np.errstate(all="ignore"):                             # a huge last term is the finding, not a warning
+                last, before = abs(avec[i] - prev[i]) / scale, abs(prev[i] - prev2[i]) / scale
+            diverging = (N >= 2 and last >= before and last > 1e-12) or not math.isfinite(last)
+            diverging = diverging or (N >= 1 and max(last, before) > 0.5)    # a term half the size of the value
+            # an asymptotic series is kept up to its smallest term. A term that grew at any earlier order means that
+            # point was passed, even if the last one happens to be smaller than the one before it
+            with np.errstate(all="ignore"):
+                terms = [abs(sums[k][i] - sums[k - 1][i]) / scale for k in range(1, len(sums))]
+            diverging = diverging or any(terms[k] >= terms[k - 1] and terms[k] > 1e-12 for k in range(1, len(terms)))
         else:
             last, diverging = math.inf, True
+        if not fallback:
+            # the caller keeps one method across its nodes, and leaves the expansion only where it has blown up outright:
+            # a term that stopped shrinking at a frequency where the transform is negligible does it no harm
+            diverging = not (np.all(np.isfinite(avec)) and abs(avec[i]) <= 1e3 * max(abs(base[i]), 1.0))
+            last = last if math.isfinite(last) else 0.0
         if diverging:
             self._diag["numericalNodes"] += 1
             if matters:
                 self._diag["numericalWeight"] = max(self._diag["numericalWeight"], float(abs(base[i])))
-            avec = _numericalAVector(Q, g, gfuncs, T, self.rtol, a0)
+            if not fallback:
+                return None, None                                        # the caller solves all of its nodes numerically
+            if u is not None and not above:
+                run = self._diag.get("run", (None, 0)); count = run[1] + 1 if run[0] == T else 1
+                self._diag["run"] = (T, count)
+                if count >= 3:
+                    cuts[T] = (u, float(abs(base[i])))
+            # what the node adds to the price is its transform times the error, so a node whose transform is small is
+            # solved to a looser relative tolerance, never looser than 1e-8
+            rtol = min(1e-8, self.rtol / max(float(abs(base[i])), 1e-300)) if a0 is None else self.rtol
+            avec = _numericalAVector(Q, g, gfuncs, T, max(rtol, self.rtol), a0); later = None
         elif matters:
             self._diag["lastTerm"] = max(self._diag["lastTerm"], last)
+        if not diverging and u is not None:
+            self._diag["run"] = (T, 0)
         gT = np.array([gi.value(T) for gi in g], complex)
-        return avec, Q @ avec + gT * avec
+        # da/dT = (Q + diag g) a holds for the solution, and Q is of the size of 1 / epsilon: applied to a truncation
+        # it loses an order (all of it at order zero, where Q 1 = 0). At order zero the derivative is the averaged
+        # forcing times a; above it one more term in the state restores the order, where that term is still small.
+        if later is None:
+            return avec, Q @ avec + gT * avec                            # solved numerically: the equation holds
+        if N == 0:
+            return avec, (self.model.chain.stationaryDistribution() @ gT) * avec   # the chain as it is now
+        with np.errstate(all="ignore"):
+            small = np.all(np.isfinite(later)) and abs(later[i] - avec[i]) <= 0.5 * abs(avec[i])
+        state = later if small else avec
+        return avec, Q @ state + gT * state
 
     def _a(self, g, gfuncs, T, a0=None):
         return self._aVector(g, gfuncs, T, a0)[0][self.regime]
 
+    def _solver(self):
+        return lambda g, gfuncs, t, a0: self._aVector(g, gfuncs, t, a0, fallback=False)[0]
+
     def _order(self):
+        if self.model.n == 1:
+            return None                                                  # the inverters solve numerically: there is no series
         return self.order if self.order is not None else self.maxOrder
 
+    def _cacheKey(self):
+        # the fallback to a numerical solve at a node is decided from the starting regime's component, and the vector
+        # depends on the order: both are part of what was computed
+        return (self.regime, self._order())
+
+    def _diagnosticsNow(self):
+        d = getattr(self, "_diag", None)
+        return None if d is None else dict(d)
+
+    def _diagnosticsSince(self, before):
+        if before is None:
+            return None
+        d = self._diag
+        return dict(lastTerm=d["lastTerm"] if d["lastTerm"] > before["lastTerm"] else 0.0,
+                    numericalNodes=d["numericalNodes"] - before["numericalNodes"], nodes=d["nodes"] - before["nodes"],
+                    numericalWeight=d["numericalWeight"] if d["numericalWeight"] > before["numericalWeight"] else 0.0)
+
+    def _diagnosticsReplay(self, contribution):
+        d = getattr(self, "_diag", None)
+        if d is None or contribution is None:
+            return
+        d["lastTerm"] = max(d["lastTerm"], contribution["lastTerm"])
+        d["numericalNodes"] += contribution["numericalNodes"]; d["nodes"] += contribution["nodes"]
+        d["numericalWeight"] = max(d["numericalWeight"], contribution["numericalWeight"])
+
     def calculate(self, instrument, results=False):
-        self._diag = dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0)
-        out = self._calculateOrders(instrument)
+        now = None if getattr(self, "_inside", False) else self._expiringUnderBelief(instrument)
+        if now is not None:                                             # prices the bonds, each a calculation of its own
+            return now if results else now["value"]
+        return self._calculateFast(instrument, results)
+
+    @byBelief(worst=("orderUsed", "lastIncrement"))
+    def _calculateFast(self, instrument, results=False):
+        if getattr(self, "_inside", False):
+            # a bond inside a swap, a cap or a parity relation: part of the instrument being priced, at its order, with
+            # its diagnostics and its one set of warnings
+            out = SwitchingEngine.calculate(self, instrument, results=True)
+            return out if results else out["value"]
+        self._diag = self._freshDiagnostics()
+        self._inside = True
+        try:
+            out = self._calculateOrders(instrument)
+        finally:
+            self._inside = False
         eps = self.model.chain.meanHoldingTime()
         d = dict(epsilon=eps, orderUsed=self.orderUsed, lastTermRelative=self._diag["lastTerm"],
                  numericalNodes=self._diag["numericalNodes"])
@@ -390,38 +822,52 @@ class FastSwitchingEngine(SwitchingEngine):
             warnings.warn(f"the fast-switching expansion is not converging at order {self.orderUsed}: the last term "
                           f"({d['lastTermRelative']:.1e} of the value) is not smaller than the one before it; the holding "
                           f"time is {eps:.3g}. Use NumericalSwitchingEngine, or order=None to stop at the best truncation.",
-                          ExpansionWarning, stacklevel=3)
+                          ExpansionWarning, stacklevel=4)
         elif d["lastTermRelative"] > 1e-3:
             warnings.warn(f"the fast-switching expansion at order {self.orderUsed} is rough: the last term is "
                           f"{d['lastTermRelative']:.1e} of the value (holding time {eps:.3g}). Raise the order or use "
-                          "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=3)
+                          "NumericalSwitchingEngine.", ExpansionWarning, stacklevel=4)
         if self._diag["numericalNodes"] and self._diag["numericalWeight"] > 1e-8:
             warnings.warn(f"the expansion diverged at {self._diag['numericalNodes']} Fourier nodes (large forcing at high "
                           f"frequency, the largest with characteristic function {self._diag['numericalWeight']:.1e}), where "
-                          "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=3)
+                          "the reduced system was solved numerically instead.", ExpansionWarning, stacklevel=4)
         return out if results else out["value"]
+
+    @staticmethod
+    def _freshDiagnostics():
+        return dict(lastTerm=0.0, notDecreasing=False, numericalNodes=0, numericalWeight=0.0, phiScale=1.0, nodes=0)
 
     def _calculateOrders(self, instrument):
         if self.order is not None:
             self.orderUsed = self.order; return super().calculate(instrument, results=True)
-        prev, prev_inc, prev_out = None, None, None
+        prev, prev_inc, prev_out, prev_diag = None, None, None, None
         for n in range(0, self.maxOrder + 1):
             self.order = n
+            self._diag = self._freshDiagnostics()                        # those of this order, not of the ones discarded
             try:
                 out = super().calculate(instrument, results=True)
             finally:
                 self.order = None
             v = out["value"]
+            if self._diag["nodes"] and self._diag["numericalNodes"] == self._diag["nodes"]:
+                # the series diverged wherever it was used and the reduced system was solved instead: that is the
+                # value, not a term of the series to be compared with the one before
+                self.orderUsed, self.lastIncrement = n, 0.0
+                return out
             if prev is not None:
                 inc = abs(v - prev) / max(abs(v), 1e-300)
-                if inc <= self.tol or (prev_inc is not None and inc > prev_inc):
-                    keep = out if inc <= self.tol else prev_out
-                    self.orderUsed, self.lastIncrement = (n if inc <= self.tol else n - 1), min(inc, prev_inc or inc)
-                    if inc > self.tol:
-                        self._diag["notDecreasing"] = True
-                    return keep
+                # two increments in a row within the tolerance: one alone can be a correction that cancels at this
+                # maturity and starting regime while the next does not
+                if inc <= self.tol and prev_inc is not None and prev_inc <= self.tol:
+                    self.orderUsed, self.lastIncrement = n, inc
+                    return out
+                if prev_inc is not None and inc > prev_inc:
+                    self.orderUsed, self.lastIncrement = n - 1, prev_inc
+                    self._diag = prev_diag
+                    self._diag["notDecreasing"] = prev_inc > self.tol or inc > 1e3 * self.tol
+                    return prev_out
                 prev_inc = inc
-            prev, prev_out = v, out
+            prev, prev_out, prev_diag = v, out, self._diag
         self.orderUsed, self.lastIncrement = self.maxOrder, prev_inc
         return prev_out
 
@@ -438,8 +884,8 @@ def _numericalAVector(Q, g, gfuncs, T, rtol=1e-12, a0=None):
 
 
 class NumericalSwitchingEngine(SwitchingEngine):
-    def __init__(self, model, regime=0, nodes=96, rtol=1e-12):
-        super().__init__(model, regime, nodes)
+    def __init__(self, model, regime=0, nodes=96, rtol=1e-12, information="inferred"):
+        super().__init__(model, regime, nodes, information)
         self.rtol = rtol
 
     def _a(self, g, gfuncs, T, a0=None):

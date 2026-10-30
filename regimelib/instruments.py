@@ -15,47 +15,152 @@ def _years(t, dayCounter=None):
     return float(t)
 
 
+def _choice(value, allowed, name):
+    """One of a fixed set of labels. Anything else is refused: defaulting to one side would build the opposite
+    contract from a misspelling."""
+    label = str(value).lower()
+    if label not in allowed:
+        raise ValueError(f"{name} must be one of {', '.join(sorted(allowed))}; got {value!r}")
+    return label
+
+
+def _exerciseStyle(exercise):
+    """"european" or "american" from None, one of those two words, or a QuantLib EuropeanExercise or AmericanExercise.
+    Anything else is refused: reading an unrecognised exercise as European would drop the early-exercise right."""
+    if exercise is None:
+        return "european"
+    if isinstance(exercise, str):
+        return _choice(exercise, ("european", "american"), "exercise")
+    name = type(exercise).__name__
+    if name in ("EuropeanExercise", "AmericanExercise"):
+        return name[:-len("Exercise")].lower()
+    raise TypeError(f"exercise must be None, 'european', 'american' or a QuantLib European or American exercise; got {name}")
+
+
+def _schedule(times, name, after=None, minimum=1):
+    """Payment or fixing times as given: finite, strictly increasing, and later than `after` when one is set. An
+    unordered schedule is refused, not sorted, since sorting would hide the caller's mistake."""
+    times = [float(t) for t in times]
+    if len(times) < minimum:
+        raise ValueError(f"{name} needs at least {minimum} time{'s' if minimum > 1 else ''}")
+    if not all(math.isfinite(t) for t in times):
+        raise ValueError(f"{name} must be finite")
+    if any(t1 <= t0 for t0, t1 in zip(times[:-1], times[1:])):
+        raise ValueError(f"{name} must be strictly increasing; got {times}")
+    if after is not None and times[0] <= after:
+        raise ValueError(f"the first of {name} must be later than {after}; got {times[0]}")
+    return times
+
+
+class FlatCurve:
+    """The discount curve e^{-rate t}. A curve given as a number is held as one of these, so that it is compared by
+    its rate; a curve given as a function or a term structure can change behind an unchanged object."""
+    def __init__(self, rate):
+        self.rate = float(rate)
+
+    def __call__(self, t):
+        return math.exp(-self.rate * t)
+
+
+def _stateOf(obj, depth=0):
+    """A comparable snapshot of the numbers an object holds: its own attributes and, to a few levels, those of the
+    objects it refers to (engine -> model -> chain). Caches and results (names starting with an underscore) are left
+    out, as are the diagnostics a calculation writes on the engine."""
+    if isinstance(obj, (bool, int, float, complex, str, type(None))):
+        return obj
+    if isinstance(obj, np.ndarray):
+        return ("array", obj.shape, obj.tobytes())
+    if isinstance(obj, (list, tuple)):
+        return tuple(_stateOf(v, depth) for v in obj)
+    if isinstance(obj, dict):
+        return tuple((k, _stateOf(v, depth)) for k, v in sorted(obj.items()))
+    if callable(obj) and not isinstance(obj, FlatCurve):
+        # a function or a bound method (a discount curve): what it returns can change while it stays the same object
+        # (a relinked QuantLib handle), and nothing here can see that, so it never compares equal and nothing that
+        # depends on it is reused
+        return object()
+    if hasattr(obj, "__dict__") and depth < 4:
+        skip = ("averaged", "correction", "memory", "diagnostics", "orderUsed", "lastIncrement", "standardError")
+        return (type(obj).__name__,) + tuple((k, _stateOf(v, depth + 1)) for k, v in sorted(vars(obj).items())
+                                             if not k.startswith("_") and k not in skip
+                                             and not (callable(v) and callable(getattr(type(obj), k, None))))  # a wrapped method
+    return id(obj)                                                       # a callable (a discount curve): identity
+
+
 class Instrument:
     """QuantLib's mold: setPricingEngine, then NPV() and the greeks the engine provides (delta(), gamma(), theta(),
     vega(), rho()); a greek the engine does not compute raises, as QuantLib's "not provided" does."""
     def __init__(self):
-        self._engine = None; self._results = None
+        self._engine = None; self._results = None; self._state = None
 
     def setPricingEngine(self, engine):
-        self._engine = engine; self._results = None
+        self._engine = engine; self._results = None; self._state = None
 
     def _calculate(self):
         if self._engine is None:
             raise RuntimeError("no pricing engine set")
+        state = _stateOf((self._engine, {k: v for k, v in vars(self).items() if k not in ("_engine", "_results", "_state")}))
         self._results = self._engine.calculate(self, results=True) if hasattr(self._engine, "supportsResults") \
             else {"value": self._engine.calculate(self)}
+        self._state = state
         return self._results
 
     def NPV(self):
         return self._calculate()["value"]
 
     def _result(self, name):
-        r = self._results if self._results is not None else self._calculate()
+        # a greek read after NPV() reuses that calculation, unless the model, the engine or the contract has changed
+        current = _stateOf((self._engine, {k: v for k, v in vars(self).items() if k not in ("_engine", "_results", "_state")}))
+        r = self._results if self._results is not None and current == self._state else self._calculate()
         if name not in r:
             raise RuntimeError(f"{name} not provided by the engine")
         return r[name]
 
     def impliedVolatility(self, price=None, accuracy=1e-10, maxEvaluations=200, minVol=1e-4, maxVol=4.0):
         """Black volatility that reproduces the price (the instrument's NPV unless a price is given), for a vanilla
-        payoff, using the model's forward and discount; as QuantLib's VanillaOption.impliedVolatility."""
+        payoff, using the model's forward and discount; as QuantLib's VanillaOption.impliedVolatility. With
+        `maxVol=None` the search widens until the Black price reaches the target or stops growing."""
         import math
         from scipy.optimize import brentq
         if getattr(self, "payoffType", "vanilla") != "vanilla":
             raise RuntimeError("implied volatility is defined for plain vanilla payoffs")
+        features = contractFeatures(self)
+        if features:                                                    # the Black formula below is European and vanilla
+            raise NotImplementedError("implied volatility inverts the European Black formula and does not apply to "
+                                      + " or ".join(features))
         m = self._engine.model; T, K = self.maturity, self.strike
+        if not callable(getattr(m, "forward", None)) or getattr(m, "r", None) is None:
+            raise NotImplementedError("implied volatility needs a model with a forward price and a constant discount "
+                                      f"rate; {type(m).__name__} has none (a Black quote is not defined for it here)")
         F, disc = m.forward(T), math.exp(-m.r * T)
         target = self.NPV() if price is None else price
         N = lambda x: 0.5 * math.erfc(-x / math.sqrt(2))
         def black(v):
-            sv = v * math.sqrt(T); d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
-            c = disc * (F * N(d1) - K * N(d2))
-            return c if self.isCall else c - disc * (F - K)
-        return brentq(lambda v: black(v) - target, minVol, maxVol, xtol=accuracy, maxiter=maxEvaluations)
+            sv = v * math.sqrt(T)
+            if sv == 0.0:                                                # intrinsic on the forward
+                return disc * max(F - K, 0.0) if self.isCall else disc * max(K - F, 0.0)
+            d1 = (math.log(F / K) + 0.5 * sv * sv) / sv; d2 = d1 - sv
+            if self.isCall:
+                return disc * (F * N(d1) - K * N(d2))
+            return disc * (K * N(-d2) - F * N(-d1))                      # directly: parity would cancel a small put
+        if maxVol is None:
+            bound = disc * (F if self.isCall else K)                     # what the Black price tends to as the volatility grows
+            if target >= bound * (1.0 - 1e-15):
+                raise ValueError(f"the price {target} is at the upper bound {bound} of the Black price, which no finite "
+                                 "volatility reaches")
+            maxVol = 4.0
+            while black(maxVol) < target and black(2.0 * maxVol) > black(maxVol):
+                maxVol *= 2.0
+        floor, cap = black(0.0), black(maxVol)
+        slack = 1e-12 * max(1.0, abs(target))
+        if target < floor - slack or target > cap + slack:
+            raise ValueError(f"the price {target} is outside the Black range [{floor}, {cap}] for volatilities up to {maxVol}")
+        if target <= floor * (1.0 + 1e-12):                              # relative to the intrinsic value: a small price
+            return 0.0                                                   # above a zero floor is a small volatility, not none
+        if target >= cap:                                                # at the upper end, within the slack above
+            return maxVol
+        lo = 0.0 if black(minVol) > target else minVol                   # the answer may lie below the default lower end
+        return brentq(lambda v: black(v) - target, lo, maxVol, xtol=accuracy, maxiter=maxEvaluations)
 
     def delta(self): return self._result("delta")
     def gamma(self): return self._result("gamma")
@@ -70,6 +175,12 @@ class ZeroCouponBond(Instrument):
     def __init__(self, maturity, dayCounter=None, regimeAtMaturity=None):
         super().__init__()
         self.maturity = _years(maturity, dayCounter)
+        if not math.isfinite(self.maturity) or self.maturity < 0:
+            raise ValueError(f"maturity must be finite and nonnegative, got {self.maturity}")
+        if regimeAtMaturity is not None:
+            import numbers
+            if isinstance(regimeAtMaturity, bool) or not isinstance(regimeAtMaturity, numbers.Integral) or regimeAtMaturity < 0:
+                raise ValueError(f"regimeAtMaturity must be a nonnegative integer regime index, got {regimeAtMaturity!r}")
         self.regimeAtMaturity = regimeAtMaturity
 
 
@@ -89,20 +200,24 @@ class VanillaOption(Instrument):
             name = type(payoff).__name__
             if "CashOrNothing" in name:                       # QuantLib-Python exposes only the callable payoff
                 self.payoffType = "cash"
-                self.cash = float(payoff(2.0 * self.strike + 1.0) if self.isCall else payoff(0.0))
+                step = max(1.0, abs(self.strike))             # a point strictly in the money, whatever the strike's sign
+                self.cash = float(payoff(self.strike + step if self.isCall else self.strike - step))
             elif "AssetOrNothing" in name:
                 self.payoffType = "asset"
         elif payoff[0] in ("cash", "asset"):
             self.payoffType = payoff[0]; kind, self.strike = payoff[1], float(payoff[2])
             self.cash = float(payoff[3]) if payoff[0] == "cash" else None
-            self.isCall = str(kind).lower() == "call"
+            self.isCall = _choice(kind, ("call", "put"), "the option type") == "call"
         else:
             kind, self.strike = payoff
-            self.isCall = str(kind).lower() == "call"
+            self.isCall = _choice(kind, ("call", "put"), "the option type") == "call"
         if maturity is None:
             raise ValueError("give the maturity in years or as a QuantLib Date")
         self.maturity = _years(maturity, dayCounter)
-        self.isAmerican = "American" in type(exercise).__name__ or str(exercise).lower() == "american"
+        self.isAmerican = _exerciseStyle(exercise) == "american"
+        self.earliestExercise = 0.0                                      # the word "american" means from now
+        if self.isAmerican and hasattr(exercise, "dates"):
+            self.earliestExercise = max(0.0, _years(exercise.dates()[0], dayCounter))
 
     def payoffOnGrid(self, S):
         S = np.asarray(S, float)
@@ -138,16 +253,40 @@ class ContinuousGeometricAsianOption(VanillaOption):
             raise ValueError("the geometric Asian option is European with a plain payoff")
 
 
+def contractFeatures(instrument):
+    """What a VanillaOption carries beyond a European terminal payoff, by name. Barrier and Asian options are
+    subclasses of VanillaOption, so an engine that only looks at strike and call/put would price them as vanilla."""
+    features = []
+    if getattr(instrument, "isAmerican", False):
+        features.append("American exercise")
+    if isinstance(instrument, BarrierOption):
+        features.append("a barrier")
+    if isinstance(instrument, ContinuousGeometricAsianOption):
+        features.append("geometric averaging")
+    return features
+
+
+def rejectFeatures(instrument, engine, unsupported, use):
+    """Raise rather than drop a contract feature the engine has no algorithm for."""
+    bad = [f for f in contractFeatures(instrument) if f in unsupported]
+    if bad:
+        raise TypeError(f"{engine} does not price {' or '.join(bad)}; use {use}")
+
+
 class CouponBond(Instrument):
     """Fixed cash flows: a list of (time, amount), or QuantLib-style (faceAmount, couponRate, times) with the last time
     carrying the face. Priced as the sum of zero-coupon bonds; delta and gamma in r0 add up the same way."""
     def __init__(self, cashflows=None, faceAmount=None, couponRate=None, times=None, dayCounter=None):
         super().__init__()
         if cashflows is None:
-            ts = [_years(t, dayCounter) for t in times]
+            ts = _schedule([_years(t, dayCounter) for t in times], "the coupon times", after=0.0)
+            if not (math.isfinite(float(faceAmount)) and math.isfinite(float(couponRate))):
+                raise ValueError("faceAmount and couponRate must be finite")
             cashflows = [(t, faceAmount * couponRate * (t - (ts[i - 1] if i else 0.0))) for i, t in enumerate(ts)]
             cashflows[-1] = (ts[-1], cashflows[-1][1] + faceAmount)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
+        if not all(math.isfinite(c) for _, c in self.cashflows):
+            raise ValueError("cash flow amounts must be finite")
         self.maturity = max(t for t, _ in self.cashflows)
 
 
@@ -156,7 +295,7 @@ class ZeroCouponBondOption(Instrument):
     (QuantLib: Vasicek.discountBondOption(type, strike, maturity, bondMaturity))."""
     def __init__(self, kind, strike, maturity, bondMaturity):
         super().__init__()
-        self.isCall = str(kind).lower() == "call"
+        self.isCall = _choice(kind, ("call", "put"), "kind") == "call"
         self.strike, self.maturity, self.bondMaturity = float(strike), _years(maturity), _years(bondMaturity)
         if self.bondMaturity <= self.maturity:
             raise ValueError("the bond must mature after the option")
@@ -166,9 +305,17 @@ class CouponBondOption(Instrument):
     """European call or put expiring at `maturity` on a bond with fixed cash flows [(time, amount)] after expiry."""
     def __init__(self, kind, strike, maturity, cashflows, dayCounter=None):
         super().__init__()
-        self.isCall = str(kind).lower() == "call"; self.strike = float(strike)
+        self.isCall = _choice(kind, ("call", "put"), "kind") == "call"; self.strike = float(strike)
         self.maturity = _years(maturity, dayCounter)
         self.cashflows = [(_years(t, dayCounter), float(c)) for t, c in cashflows]
+        if not all(math.isfinite(c) for _, c in self.cashflows):
+            raise ValueError("cash flow amounts must be finite")
+        if any(c != 0 for _, c in self.cashflows):               # a payment of nothing is no payment, whatever its date
+            self.cashflows = [(t, c) for t, c in self.cashflows if c != 0]
+        if any(c < 0 for _, c in self.cashflows):
+            # the option is priced by one exercise boundary per regime, which needs a bond that falls as the rate rises
+            raise ValueError("cash flow amounts must be nonnegative: with signed amounts the bond is not monotone in "
+                             "the rate and the exercise region is not one interval")
         if min(t for t, _ in self.cashflows) <= self.maturity:
             raise ValueError("all cash flows must fall after the option expiry")
 
@@ -181,12 +328,22 @@ class Swaption(Instrument):
     priced by SwitchingFDEngine (QuantLib: TreeSwaptionEngine)."""
     def __init__(self, kind, maturity, fixedTimes, fixedRate, notional=1.0, dayCounter=None, exerciseTimes=None):
         super().__init__()
-        self.isPayer = str(kind).lower() == "payer"
+        self.isPayer = _choice(kind, ("payer", "receiver"), "kind") == "payer"
         if hasattr(maturity, "dates"):                       # a QuantLib BermudanExercise
             exerciseTimes = [_years(d, dayCounter) for d in maturity.dates()]; maturity = exerciseTimes[0]
-        self.exerciseTimes = None if exerciseTimes is None else sorted(_years(t, dayCounter) for t in exerciseTimes)
-        self.maturity = _years(maturity, dayCounter); ts = [_years(t, dayCounter) for t in fixedTimes]
+        self.maturity = _years(maturity, dayCounter)
         self.fixedRate, self.notional = float(fixedRate), float(notional)
+        if not all(math.isfinite(v) for v in (self.maturity, self.fixedRate, self.notional)):
+            raise ValueError("maturity, fixedRate and notional must be finite")
+        ts = _schedule([_years(t, dayCounter) for t in fixedTimes], "fixedTimes", after=self.maturity)
+        if exerciseTimes is None:
+            self.exerciseTimes = None
+        else:                                                # the first exercise is the expiry the first accrual starts from
+            self.exerciseTimes = _schedule([_years(t, dayCounter) for t in exerciseTimes], "exerciseTimes")
+            if abs(self.exerciseTimes[0] - self.maturity) > 1e-9:
+                raise ValueError(f"the first exercise time must be the maturity {self.maturity}; got {self.exerciseTimes[0]}")
+            if self.exerciseTimes[-1] >= ts[-1]:
+                raise ValueError("every exercise time must be earlier than the last fixed payment")
         cfs = [(t, notional * fixedRate * (t - (ts[i - 1] if i else self.maturity))) for i, t in enumerate(ts)]
         cfs[-1] = (ts[-1], cfs[-1][1] + notional)
         self.cashflows = cfs
@@ -198,8 +355,9 @@ class CapFloor(Instrument):
     floorlets are the calls (QuantLib: CapFloor with AnalyticCapFloorEngine)."""
     def __init__(self, kind, times, strike, notional=1.0, dayCounter=None):
         super().__init__()
-        self.isCap = str(kind).lower() == "cap"
-        self.times = [_years(t, dayCounter) for t in times]; self.strike, self.notional = float(strike), float(notional)
+        self.isCap = _choice(kind, ("cap", "floor"), "kind") == "cap"
+        self.times = _schedule([_years(t, dayCounter) for t in times], "the cap or floor times", minimum=2)
+        self.strike, self.notional = float(strike), float(notional)
         self.maturity = self.times[-1]
 
 
@@ -210,10 +368,12 @@ class CreditDefaultSwap(Instrument):
     valued at the mid-point of each accrual period, as QuantLib's MidPointCdsEngine, with `accrualOnDefault`."""
     def __init__(self, side, spread, times, recovery, discount=0.0, accrualOnDefault=True, dayCounter=None):
         super().__init__()
-        self.isBuyer = str(side).lower() == "buyer"
+        self.isBuyer = _choice(side, ("buyer", "seller"), "side") == "buyer"
         self.spread, self.recovery = float(spread), float(recovery)
-        self.times = [_years(t, dayCounter) for t in times]
-        self.discount = discount if callable(discount) else (lambda t, r=float(discount): math.exp(-r * t))
+        if not math.isfinite(self.recovery) or not 0.0 <= self.recovery <= 1.0:
+            raise ValueError(f"recovery must be finite and lie in [0, 1], got {self.recovery}")
+        self.times = _schedule([_years(t, dayCounter) for t in times], "the premium times", after=0.0)
+        self.discount = discount if callable(discount) else FlatCurve(discount)
         self.accrualOnDefault = accrualOnDefault
         self.maturity = self.times[-1]
 

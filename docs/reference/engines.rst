@@ -12,10 +12,25 @@ The expansion
 
 The fast-switching expansion of the reduced system ``a' = (Q + diag g) a`` in the mean holding time of the chain,
 ``n / -trace Q``, through ``order`` terms with the initial layer that carries the starting regime. ``order=None``
-adds terms until successive orders agree to ``tol`` or the series stops improving — the best truncation of an
-asymptotic series — and records ``orderUsed`` and ``lastIncrement`` after ``NPV()``. At Fourier nodes where the
-series diverges (large forcing at high frequency) the reduced system is solved numerically instead and the count is
-reported; see :class:`rl.ExpansionWarning`.
+adds terms until two increments in a row are within ``tol`` (one alone can be a correction that cancels) or the
+series stops improving — the best truncation of an asymptotic series — and records ``orderUsed`` and
+``lastIncrement`` after ``NPV()``. At Fourier nodes where the series diverges (large forcing at high frequency) the
+reduced system is solved numerically instead and the count is reported; see :class:`rl.ExpansionWarning`. An option
+on a bond or a swap refines its quadrature until two rules agree, which needs one method across the nodes: it keeps
+the series unless that has blown up outright, and then solves every node numerically. The diagnostics and the
+warnings are those of the instrument priced and of the order kept, not of the bonds inside it or the orders tried.
+
+The expansion is in the mean holding time, so it is for a chain that mixes on that scale. A chain of three or more
+regimes with a mode a million times slower than its fastest (fast switching within groups, slow between them) is
+refused, and a payoff in a regime the stationary law gives less than a millionth is solved numerically. Theta at
+order zero is the maturity derivative of the order-zero price; above it, it is computed with one more term in the
+state, since the reduced equation applied to a truncation loses an order.
+
+The transform engines are accurate in absolute terms, to about ``1e-10`` of the notional. A value far out of the
+money that is smaller than that is the error of an integral, so it is kept within its bounds (never negative, never
+below the discounted forward intrinsic value) and is not accurate in relative terms. The Fourier range is sized from
+the transform being inverted, from the starting regime; for an option on a bond from a regime far quieter than the
+others, on a chain too slow to leave it before expiry, that range is refused and ``SwitchingFDEngine`` prices it.
 
 .. code-block:: python
 

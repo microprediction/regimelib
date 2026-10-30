@@ -4,7 +4,7 @@ from .models import (SwitchingVasicek, SwitchingVasicekJumps, SwitchingCoxIngers
                      SwitchingHestonModel, SwitchingMerton76Process, SwitchingBatesModel, SwitchingVarianceGammaProcess, SwitchingHullWhite, SwitchingG2, SwitchingCEVProcess, SwitchingIntensityBasket, SwitchingHestonVolOfVol)
 from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, CouponBond, CouponBondOption, Swaption, CapFloor, BarrierOption, ContinuousGeometricAsianOption, CreditDefaultSwap
 FirstToDefaultSwap = CreditDefaultSwap                 # on a SwitchingIntensityBasket
-from .engines import FastSwitchingEngine, NumericalSwitchingEngine, ExpansionWarning
+from .engines import FastSwitchingEngine, NumericalSwitchingEngine, ExpansionWarning, IntensityWarning
 from .montecarlo import MonteCarloSwitchingEngine
 from .firstorder import FirstOrderFDEngine, SwitchingFDReferee
 from .fd import SwitchingFDEngine
@@ -13,5 +13,5 @@ from .calibration import VolatilityHelper, calibrate
 from . import symbolic
 __all__ = ["RegimeChain", "SwitchingVasicek", "SwitchingVasicekJumps", "SwitchingCoxIngersollRoss", "SwitchingBlackScholesProcess",
            "SwitchingHestonModel", "SwitchingMerton76Process", "SwitchingBatesModel", "SwitchingVarianceGammaProcess", "SwitchingHullWhite", "SwitchingG2", "SwitchingCEVProcess", "SwitchingIntensityBasket", "SwitchingHestonVolOfVol", "ZeroCouponBond", "VanillaOption", "ZeroCouponBondOption", "CouponBond", "CouponBondOption", "Swaption", "CapFloor", "BarrierOption", "ContinuousGeometricAsianOption", "CreditDefaultSwap", "FirstToDefaultSwap",
-           "FastSwitchingEngine", "NumericalSwitchingEngine", "ExpansionWarning", "MonteCarloSwitchingEngine", "FirstOrderFDEngine", "SwitchingFDReferee", "SwitchingFDEngine", "VolatilityHelper", "calibrate", "SwitchingEquityRates"]
+           "FastSwitchingEngine", "NumericalSwitchingEngine", "ExpansionWarning", "IntensityWarning", "MonteCarloSwitchingEngine", "FirstOrderFDEngine", "SwitchingFDReferee", "SwitchingFDEngine", "VolatilityHelper", "calibrate", "SwitchingEquityRates"]
 __version__ = "0.1.0"

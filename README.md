@@ -1,9 +1,11 @@
 # regimelib
 
-QuantLib's models with a hidden Markov regime, priced by the fast-switching expansion of
-[homogenization.microprediction.org](https://homogenization.microprediction.org).
+QuantLib's models with a hidden Markov regime: any parameter of a model may take a different value in each state of
+a finite Markov chain, and the usual instruments are priced under it.
 
-Install: `pip install regimelib` ([PyPI](https://pypi.org/project/regimelib/)). Documentation: [regimeswitching.org/python](https://regimeswitching.org/python/) (QuantLib-Python's layout: instruments, engines, models, helpers, examples); the site [regimeswitching.org](https://regimeswitching.org) is the home of this and the ports to come.
+- **Install:** `pip install regimelib` ([PyPI](https://pypi.org/project/regimelib/))
+- **Documentation:** [regimelib.org](https://regimelib.org). Every model has one page with its mathematics and the
+  Python that evaluates it ([model index](https://regimelib.org/models/index.html)).
 
 Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it
@@ -39,25 +41,26 @@ print(opt.NPV())
 | `CEVProcess` | `SwitchingCEVProcess(chain, S0, r, q, sigma, beta)` (first-order tier) | `sigma` |
 | `HestonProcess` with `sigma` (vol-of-vol) switching | `SwitchingHestonVolOfVol(chain, S0, r, q, v0, kappa, theta, xi, rho)` (first-order tier, 2-D grid; frozen limit against `AnalyticHestonEngine`) | `xi` |
 
-The mathematics of each model, with the derivation and the closed form to second order for a two-state chain:
+The mathematics of each model and the Python that evaluates it, on one page per model ([index](https://regimelib.org/models/index.html)):
 
-| regimelib | derivation |
+| regimelib | mathematics and Python |
 |---|---|
-| `SwitchingVasicek` | [Vasicek with a switching mean level and volatility](https://homogenization.microprediction.org/regime-switching.html) |
-| `SwitchingVasicekJumps` | [Vasicek with jumps at a switching intensity](https://homogenization.microprediction.org/jumps.html) |
-| `SwitchingCoxIngersollRoss` | [CIR with a switching mean level](https://homogenization.microprediction.org/cir.html) |
-| `SwitchingHullWhite` | [Hull–White with a switching volatility](https://homogenization.microprediction.org/hull-white.html) |
-| `SwitchingG2` | [G2++ with switching volatilities and correlation](https://homogenization.microprediction.org/g2.html) |
-| `SwitchingIntensityBasket` | [Two-name credit](https://homogenization.microprediction.org/credit.html) |
-| `SwitchingBlackScholesProcess` | [Black–Scholes with a switching volatility](https://homogenization.microprediction.org/black-scholes.html) |
-| `SwitchingMerton76Process` | [Merton with a switching jump intensity](https://homogenization.microprediction.org/merton.html) |
-| `SwitchingVarianceGammaProcess` | [Variance gamma with switching parameters](https://homogenization.microprediction.org/variance-gamma.html) |
-| `SwitchingHestonModel` | [Heston with a switching long-run variance](https://homogenization.microprediction.org/heston.html) |
-| `SwitchingBatesModel` | [Bates with a switching variance level and jump intensity](https://homogenization.microprediction.org/bates.html) |
-| `SwitchingEquityRates` | [Equity options under stochastic rates](https://homogenization.microprediction.org/equity-rates.html) |
-| `SwitchingCEVProcess` | [CEV with a switching volatility](https://homogenization.microprediction.org/cev.html) |
-| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://homogenization.microprediction.org/cycle-smile.html) |
-| instruments | [Instruments](https://homogenization.microprediction.org/instruments.html), [Options on bonds](https://homogenization.microprediction.org/bond-options.html) |
+| `SwitchingVasicek` | [Vasicek](https://regimelib.org/models/vasicek.html) |
+| `SwitchingVasicekJumps` | [Vasicek with jumps](https://regimelib.org/models/vasicek_jumps.html) |
+| `SwitchingCoxIngersollRoss` | [Cox–Ingersoll–Ross](https://regimelib.org/models/cir.html) |
+| `SwitchingHullWhite` | [Hull–White](https://regimelib.org/models/hull_white.html) |
+| `SwitchingG2` | [G2++](https://regimelib.org/models/g2.html) |
+| `SwitchingIntensityBasket` | [Intensity basket](https://regimelib.org/models/intensity_basket.html) |
+| `SwitchingBlackScholesProcess` | [Black–Scholes](https://regimelib.org/models/black_scholes.html) |
+| `SwitchingMerton76Process` | [Merton jump diffusion](https://regimelib.org/models/merton.html) |
+| `SwitchingVarianceGammaProcess` | [Variance gamma](https://regimelib.org/models/variance_gamma.html) |
+| `SwitchingHestonModel` | [Heston](https://regimelib.org/models/heston.html) |
+| `SwitchingBatesModel` | [Bates](https://regimelib.org/models/bates.html) |
+| `SwitchingEquityRates` | [Equity with stochastic rates](https://regimelib.org/models/equity_rates.html) |
+| `SwitchingCEVProcess` | [CEV](https://regimelib.org/models/cev.html) |
+| `SwitchingHestonVolOfVol` | [Heston with a switching volatility of variance](https://regimelib.org/models/heston_vol_of_vol.html) |
+| bond options, swaptions, caps | [Options on bonds, swaptions and caps](https://regimelib.org/models/bond_options.html) |
+| other instruments | [Other instruments](https://regimelib.org/models/instruments.html) |
 
 Instruments, with the QuantLib engine that the frozen limit is checked against:
 
@@ -78,7 +81,7 @@ Instruments, with the QuantLib engine that the frozen limit is checked against:
 Instruments accept QuantLib payoff and exercise objects or plain `("call", strike)` tuples. Maturities are years, or QuantLib Dates measured from the evaluation date (Actual/365 unless a `dayCounter` is given); a `VanillaOption` takes its maturity from a QuantLib exercise.
 
 Engines: `FastSwitchingEngine(model, order, regime)` expands in the mean holding time `n / -trace Q` to any order,
-with the initial layer; `order=None` adds terms until successive orders agree to `tol` or the series stops improving
+with the initial layer; `order=None` adds terms until two successive increments are within `tol` or the series stops improving
 (`orderUsed` and `lastIncrement` are set after `NPV()`). The engine raises an `ExpansionWarning` when the last term is
 not smaller than the one before it or when it is more than a thousandth of the value. The series is asymptotic in the
 holding time times the forcing, so at Fourier nodes of high frequency it diverges; there the engine solves the reduced
@@ -126,4 +129,5 @@ Roadmap: parameter greeks for the option formulas; ports to other languages with
 Tests: `pytest` runs every certificate (about nine minutes); `pytest -m 'not slow'` skips the four slowest and runs in about two.
 
 The engine (`regimelib/_engine/`) is a copy of the certificates' code in
-[microprediction/homogenization](https://github.com/microprediction/homogenization); the mathematics is on the site.
+[microprediction/homogenization](https://github.com/microprediction/homogenization), the general site on the
+fast-switching expansion; the mathematics of each model here is at [regimelib.org](https://regimelib.org).

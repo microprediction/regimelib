@@ -7,16 +7,19 @@ D_x(tau) = c B_a e^{-a tau} + (1 - e^{-a tau}) / a and likewise D_y."""
 import math
 import cmath
 import numpy as np
-from ._engine.options import _kronrod_nodes
-from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable
+from ._engine.options import _kronrod_nodes, settled
+from ._engine.fastswitch import FastSwitch, ExpSum, numerical_a_callable, _finished
+from ._engine.models import loadings, stable_B, ou_variance, int_B2, refuse_hidden_variance
 
 
-def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy):
-    """ExpSum forcing per regime for terminal coefficients cx, cy (complex allowed)."""
-    Dx = ExpSum({0: 1 / a, a: cx - 1 / a}); Dy = ExpSum({0: 1 / b, b: cy - 1 / b})
+def _g2_forcing(a, b, sigmas, etas, rhos, cx, cy, T=None):
+    """Forcing per regime for terminal coefficients cx, cy (complex allowed) on [0, T]: exponential sums, or
+    Chebyshev series when a reversion speed is small or zero; the callables evaluate the loadings stably."""
+    (Dx, fx), (Dy, fy) = loadings([(a, cx), (b, cy)], T)
     g = [(Dx * Dx).scale(0.5 * s * s) + (Dy * Dy).scale(0.5 * e * e) + (Dx * Dy).scale(r * s * e)
          for s, e, r in zip(sigmas, etas, rhos)]
-    gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+    gfuncs = [(lambda s, e, r: (lambda t: 0.5 * s * s * fx(t) ** 2 + 0.5 * e * e * fy(t) ** 2 + r * s * e * fx(t) * fy(t)))(s, e, r)
+              for s, e, r in zip(sigmas, etas, rhos)]
     return g, gfuncs
 
 
@@ -29,59 +32,117 @@ def _g2_terminal_vectors(t, Q, a, b, sigmas, etas, rhos, cxs, cys, A0, rtol=1e-1
 
     def rhs(tau, y):
         A = (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
-        Dx = cxs * math.exp(-a * tau) + (1 - math.exp(-a * tau)) / a
-        Dy = cys * math.exp(-b * tau) + (1 - math.exp(-b * tau)) / b
+        Dx = cxs * math.exp(-a * tau) + stable_B(a, tau)
+        Dy = cys * math.exp(-b * tau) + stable_B(b, tau)
         g = 0.5 * s * s * Dx * Dx + 0.5 * e * e * Dy * Dy + r * s * e * Dx * Dy
         d = g * A + Q @ A
         return np.concatenate([d.real.ravel(), d.imag.ravel()])
     y0 = np.asarray(A0, complex)
-    y = solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method="DOP853", rtol=rtol, atol=1e-14).y[:, -1]
+    y = _finished(solve_ivp(rhs, (0, t), np.concatenate([y0.real.ravel(), y0.imag.ravel()]), method="DOP853", rtol=rtol, atol=1e-14), t)
     return (y[:m * nc] + 1j * y[m * nc:]).reshape(m, nc)
 
 
-def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None, tol=1e-10, panels=None):
+def g2_zcb_call(T, S, K, start, a, b, sigmas, etas, rhos, Q, order=None, U=None, tol=1e-10, panels=None, solve=None):
     """Call expiring at T, strike K, on the unit bond maturing at S, in the zero-mean factor model (x0 = y0 = 0,
     no phi): the caller scales by the deterministic curve factors. order=None: numerical solution; else expansion."""
     Q = np.asarray(Q, float); m = len(sigmas)
     wv, vl = np.linalg.eig(Q.T); pi = np.real(vl[:, np.argmin(abs(wv))]); pi = pi / pi.sum()
     sig, eta, rho = map(lambda v: np.asarray(v, float), (sigmas, etas, rhos))
     tau = S - T
-    Ba, Bb = (1 - math.exp(-a * tau)) / a, (1 - math.exp(-b * tau)) / b
-    Vx = float(pi @ sig ** 2) * (1 - math.exp(-2 * a * T)) / (2 * a)
-    Vy = float(pi @ eta ** 2) * (1 - math.exp(-2 * b * T)) / (2 * b)
-    Cxy = float(pi @ (rho * sig * eta)) * (1 - math.exp(-(a + b) * T)) / (a + b)
+    Ba, Bb = stable_B(a, tau), stable_B(b, tau)
+    Vx = float(pi @ sig ** 2) * ou_variance(a, T)
+    Vy = float(pi @ eta ** 2) * ou_variance(b, T)
+    Cxy = float(pi @ (rho * sig * eta)) * ou_variance((a + b) / 2, T)
     var = Ba * Ba * Vx + Bb * Bb * Vy + 2 * Ba * Bb * Cxy
-    if U is None:
+    chosen = U is None
+    if U is None and var > 0:
         U = 8 / math.sqrt(var)
 
-    def a_vec(t, c, a0):
-        g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb)
-        if order is None:
-            return numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
-        return FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+    def a_vec(t, c, a0, numerical=True, direct=False):
+        g, gf = _g2_forcing(a, b, sig, eta, rho, c * Ba, c * Bb, t)
+        out = None if order is None or direct else solve(g, gf, t, a0) if solve is not None else FastSwitch(Q, g, order=order, a0=a0).a(t, order)
+        if out is None and numerical:
+            out = numerical_a_callable(t, Q, gf, rtol=1e-12, a0=a0)
+        return out
     A = np.asarray(a_vec(tau, 0.0, np.ones(m))).real                    # bond factors at expiry per regime
+    if var < -1e-12 * (Ba * Ba * Vx + Bb * Bb * Vy):
+        raise ValueError("the factor covariance is not positive semidefinite")
+    # the shortcut below needs the variance to vanish in every regime, not only on stationary average
+    perRegime = (Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
+                 + 2 * Ba * Bb * rho * sig * eta * ou_variance((a + b) / 2, T))
+    scale = Ba * Ba * sig ** 2 * ou_variance(a, T) + Bb * Bb * eta ** 2 * ou_variance(b, T)
+    # "no variance" is what rounding leaves of an exact cancellation, a few units in the last place of the terms that
+    # cancel. Anything larger is a variance: near cancellation the option still has time value, of the order of its root
+    ROUND = 64 * np.finfo(float).eps
+    if not np.all(perRegime <= ROUND * np.maximum(scale, 1e-300)):
+        refuse_hidden_variance(var if var > ROUND * (Ba * Ba * Vx + Bb * Bb * Vy) else 0.0, [1.0], "a G2 bond option")
+    if var <= ROUND * (Ba * Ba * Vx + Bb * Bb * Vy) or var == 0.0:
+        # B_a x_T + B_b y_T has no variance (no volatility, or exact cancellation): the bond at expiry is A_j in regime j
+        return float(sum(max(A[j] - K, 0.0) * np.asarray(a_vec(T, 0.0, np.eye(m)[j]))[start].real for j in range(m)))
+    if var <= 1e-8 * (Ba * Ba * Vx + Bb * Bb * Vy):
+        # the factors cancel to within a part in 1e8 and not exactly: the transform of what is left is the difference
+        # of two large exponents at frequencies of 1 / sqrt(var), which this integral does not resolve
+        raise NotImplementedError("a G2 bond option whose two factors nearly cancel in the bond (variance "
+                                  f"{var:.3g} against {Ba * Ba * Vx + Bb * Bb * Vy:.3g} uncancelled) is not priced; "
+                                  "it has a small time value that is neither zero nor resolved. Move the correlation "
+                                  "away from -1 or +1, or set it there exactly.")
     zstar = [math.log(A[j] / K) for j in range(m)]
     cases = [(j, c0, weight) for j in range(m) for c0, weight in ((1.0, A[j]), (0.0, -K))]
-    price = 0.0
-    for j, c0, weight in cases:
-        price += weight * 0.5 * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real
-    rate = max(abs(zs) for zs in zstar) + math.sqrt(var)
+    # z = B_a x_T + B_b y_T has mean zero and, given the path of the chain, at most this variance
+    vmax = (abs(Ba) * np.max(np.abs(sig)) * math.sqrt(ou_variance(a, T)) + abs(Bb) * np.max(np.abs(eta)) * math.sqrt(ou_variance(b, T))) ** 2
+    terms = [weight * np.asarray(a_vec(T, c0, np.eye(m)[j]))[start].real for j, c0, weight in cases]
+    # the integrated rate int (x + y) has at most this standard deviation, and its covariance with z moves z's mean
+    sdI = np.max(np.abs(sig)) * math.sqrt(int_B2(a, T)) + np.max(np.abs(eta)) * math.sqrt(int_B2(b, T))
+    sure = settled(zstar, 0.0, 0.0, vmax, 1.0, drift=sdI * math.sqrt(vmax), scale=max(abs(t) for t in terms))
+    price = sum(t * (0.5 if sure[j] is None else sure[j]) for t, (j, _, _) in zip(terms, cases))
+    cases = [case for case in cases if sure[case[0]] is None]
+    if not cases:
+        return float(price)
+    if chosen:
+        # the stationary variance sizes a chain that mixes before expiry; from a quiet regime it may not leave, the
+        # transform decays more slowly, so follow the transforms themselves
+        beyond = lambda U: max(abs(np.asarray(a_vec(T, c0 - 1j * U, np.eye(m)[j], direct=True))[start]) for j, c0, _ in cases)
+        widest = 16 * U; size = max(1.0, max(abs(t) for t in terms))     # against the terms, which a rate shift scales
+        while U < widest and beyond(U) > 1e-9 * size:
+            U *= 2
+        if beyond(U) > 1e-9 * size:
+            raise ArithmeticError("the transform from this starting regime has not decayed at sixteen times the range "
+                                  "the stationary variance gives: the chain is slow against the expiry and this regime "
+                                  "is far quieter than the others. Use SwitchingFDEngine for this option.")
+    rate = max(abs(zs) for zs, known in zip(zstar, sure) if known is None) + math.sqrt(var)
     npan = max(4, math.ceil(U * rate / math.pi)) if panels is None else panels
+    if panels is None and npan > 400:
+        # the exercise boundary is far from the state in units of the range integrated (a bond maturing just after
+        # expiry, at a strike away from par) and yet not far enough to be settled
+        raise ArithmeticError(f"the Gil-Pelaez integrals would need {npan:,} panels: the exercise boundary is "
+                              f"{rate:.3g} from the state's mean over a range of {U:.3g}. Use SwitchingFDEngine.")
+    blownUp = False
     for _ in range(6):
         us, wk, wg = _kronrod_nodes(U, npan); nu = len(us)
-        if order is None:
+        avals = None
+        if order is not None and not blownUp:
+            avals = np.empty((len(cases), nu), complex)
+            for k, (j, c0, _) in enumerate(cases):
+                for n, u in enumerate(us):
+                    value = a_vec(T, c0 - 1j * u, np.eye(m)[j], numerical=False)
+                    if value is None:
+                        blownUp = True; break                           # one method for every node: see _solver
+                    avals[k, n] = np.asarray(value)[start]
+                if blownUp:
+                    avals = None; break
+        if avals is None:
             cs = np.concatenate([c0 - 1j * us for _, c0, _ in cases])
             A0 = np.zeros((m, len(cases) * nu), complex)
             for k, (j, _, _) in enumerate(cases):
                 A0[j, k * nu:(k + 1) * nu] = 1.0
             avals = _g2_terminal_vectors(T, Q, a, b, sig, eta, rho, cs * Ba, cs * Bb, A0)[start].reshape(len(cases), nu)
-        else:
-            avals = np.array([[np.asarray(a_vec(T, c0 - 1j * u, np.eye(m)[j]))[start] for u in us] for j, c0, _ in cases])
         val, err = 0.0, 0.0
         for k, (j, c0, weight) in enumerate(cases):
             f = (np.exp(-1j * us * zstar[j]) * avals[k]).imag / us
             val += weight * (-(wk @ f) / math.pi); err += abs(weight) * abs((wk - wg) @ f) / math.pi
-        if err <= tol:
+        if err <= tol * max(1.0, abs(K)):                          # of the strike: the price scales with it
             return price + val
         npan *= 2
+        if npan > 800:
+            break
     raise ArithmeticError(f"the Gil-Pelaez integrals did not converge to {tol:.0e} (error estimate {err:.1e})")

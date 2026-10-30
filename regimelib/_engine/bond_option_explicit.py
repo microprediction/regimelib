@@ -19,6 +19,7 @@ import numpy as np
 from math import comb
 from scipy.stats import norm
 from .explicit import vasicek_moment
+from .models import stable_B
 
 
 def Phi_n(n, T, kappa):
@@ -59,7 +60,7 @@ def pieces(kappa, th, sig, x0, T, S, lam):
     sb, st = np.mean(s2), (s2[0] - s2[1]) / 2
     eps = 1 / lam
     E = math.exp(-kappa * T)
-    B = (1 - E) / kappa
+    B = stable_B(kappa, T)
     I1, I2 = M(0, 1, T, kappa), M(0, 2, T, kappa)
     EB = M(1, 1, T, kappa)
     alpha = -B * x0 - kappa * thb * I1 + 0.5 * sb * I2          # log of the averaged P(0, T)
@@ -74,7 +75,7 @@ def pieces(kappa, th, sig, x0, T, S, lam):
     gt0 = [0.0, -kappa * tht, 0.5 * st]                          # Bc(0) = c
     # bond factors at expiry, tau = S - T, c = 0
     tau = S - T
-    b = (1 - math.exp(-kappa * tau)) / kappa
+    b = stable_B(kappa, tau)
     Itau = {k: M(0, k, tau, kappa) for k in (1, 2, 3, 4)}
     gbar_int = -kappa * thb * Itau[1] + 0.5 * sb * Itau[2]
     gt2_int = (kappa * tht) ** 2 * Itau[2] - kappa * tht * st * Itau[3] + st * st / 4 * Itau[4]
@@ -121,6 +122,15 @@ def R(k, A, K, b, mu, v):
 
 
 def call(kappa, th, sig, x0, T, S, K, lam, start=0, order=1):
+    if order and not T * lam >= 5.0:
+        # the outer expansion: its corrections carry powers of 1 / sd(x_T), and with no initial layer they grow as the
+        # expiry falls to the holding time
+        raise ValueError(f"the closed form is the outer expansion, for an expiry of at least five holding times "
+                         f"(T lam >= 5); here T lam = {T * lam:.3g}. Use the engines.")
+    if not any(s != 0 for s in sig):
+        # the formula integrates against the Gaussian density of x_T, and with no diffusion there is none
+        raise ValueError("the closed form needs a positive volatility in some regime: with none the rate at expiry "
+                         "has no density. Use the engines.")
     p = pieces(kappa, th, sig, x0, T, S, lam)
     eps = p['eps'] if order else 0.0
     sign = 1 if start == 0 else -1
@@ -134,7 +144,7 @@ def call(kappa, th, sig, x0, T, S, K, lam, start=0, order=1):
 
 
 if __name__ == '__main__':
-    from options import zcb_call
+    from .options import zcb_call
     kappa, th, sig, x0, T, S = 0.5, [0.05, 0.03], [0.015, 0.010], 0.04, 1.0, 4.0
     for lam in (10.0, 20.0, 40.0):
         Q = lam * np.array([[-1.0, 1.0], [1.0, -1.0]])

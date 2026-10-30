@@ -12,8 +12,65 @@ from ._engine import quantlib_models as _q
 from ._engine.fastswitch import ExpSum, Cheb
 
 
-def _per_regime(x, n):
-    return [float(x)] * n if np.isscalar(x) else [float(v) for v in x]
+def _per_regime(x, n, name="parameter"):
+    """A scalar is shared by every regime; a sequence must have one entry per regime."""
+    if np.isscalar(x):
+        return [float(x)] * n
+    values = [float(v) for v in x]
+    if len(values) != n:
+        raise ValueError(f"{name} must be a scalar or have exactly {n} entries, one per regime; got {len(values)}")
+    return values
+
+
+def _spread(speed, T):
+    """What multiplies sigma^2 in the variance a grid must hold: the stationary 1 / (2 speed), or four times the
+    variance reached by T where that is smaller (a slow or absent reversion, whose stationary variance is unbounded)."""
+    reached = 4.0 * _m.ou_variance(speed, T)
+    return min(1.0 / (2.0 * speed), reached) if speed > 0 else reached
+
+
+def _lastDecision(instrument):
+    """The latest date at which the holder decides: the grid is marched from there, so it is sized for it."""
+    return max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
+
+
+def _convexity(x):
+    """exp(-x) for the Gaussian convexity term x = (integrated variance) / 2 of a curve-fitted model. The fitted
+    curve is this factor times its reciprocal from the reduced system, so once either leaves the floating range the
+    finite product is lost."""
+    if not abs(x) < 650.0:
+        raise ArithmeticError(f"the Gaussian convexity term is e^{x:.0f}, beyond the floating-point range: rate "
+                              "volatilities this large over this horizon are not priced")
+    return math.exp(-x)
+
+
+def _check(values, name, ok, requirement):
+    """Every entry of a scalar or per-regime parameter satisfies `ok`; the error names the parameter and the regime."""
+    for i, v in enumerate(np.atleast_1d(np.asarray(values, float))):
+        if not (math.isfinite(v) and ok(v)):
+            where = f" (regime {i})" if np.ndim(values) else ""
+            raise ValueError(f"{name} must be {requirement}; got {v}{where}")
+
+
+def _nonnegative(values, name):
+    _check(values, name, lambda v: v >= 0.0, "finite and nonnegative")
+
+
+def _correlation(values, name="rho"):
+    _check(values, name, lambda v: abs(v) <= 1.0, "finite and between -1 and 1")
+
+
+_SCALES = ("sigma", "eta", "xi", "logJumpVol")              # diffusion and jump-size scales: a sign has no meaning
+_SPEEDS = ("a", "k", "kappa")                                # reversion speeds: a negative one is an explosive model
+
+
+def _checkDomains(model):
+    """Shared by every model, after its constructor has run: volatilities and reversion speeds are finite and
+    nonnegative. A negative volatility describes the same law as its absolute value while breaking code that compares
+    volatilities, and a negative reversion speed is not the model these classes document."""
+    for name in _SCALES + _SPEEDS + (("b",) if isinstance(model, SwitchingG2) else ()):
+        if hasattr(model, name) and getattr(model, name) is not None:
+            _nonnegative(getattr(model, name), name)
 
 
 class SwitchingModel:
@@ -21,18 +78,30 @@ class SwitchingModel:
         self.chain = chain
         self.n = chain.numberOfRegimes()
 
+    def __init_subclass__(cls, **kwargs):
+        super().__init_subclass__(**kwargs)
+        init = cls.__dict__.get("__init__")
+        if init is not None:
+            def checked(self, *args, __init=init, **kw):
+                __init(self, *args, **kw)
+                _checkDomains(self)
+            checked.__doc__, checked.__name__ = init.__doc__, "__init__"
+            cls.__init__ = checked
+
 
 # ---------------------------------------------------------------- short-rate models: zero-coupon bonds
 class SwitchingVasicek(SwitchingModel):
     """QuantLib Vasicek(r0, a, b, sigma): dr = a (b - r) dt + sigma dW. b and sigma may switch."""
+    _diffusion, _switching = ("sigma",), ("b", "sigma")          # see regimelib.information
+
     def __init__(self, chain, r0, a, b, sigma):
         super().__init__(chain)
         self.r0, self.a = float(r0), float(a)
-        self.b, self.sigma = _per_regime(b, self.n), _per_regime(sigma, self.n)
+        self.b, self.sigma = _per_regime(b, self.n, "b"), _per_regime(sigma, self.n, "sigma")
 
     def bondForcing(self, T):
         rhos = [[[1.0]]] * self.n
-        g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0])
+        g, gfuncs, pre = _m.gaussian_factors([self.a], [self.b], [self.sigma], rhos, [1.0], T)
         return g, gfuncs, (lambda t: pre(t, [self.r0]))
 
     def operators(self, instrument, n, width, stretch=None):
@@ -45,7 +114,10 @@ class SwitchingVasicek(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            sd = math.sqrt(max(s2) / (2 * self.a)); L = width or 8 * sd + abs(b.max() - b.min()) + abs(self.r0 - bbar)
+            # by the last decision the rate has moved a fraction 1 - e^{-a T} of the way to a level, whatever the regime path
+            Tend = _lastDecision(instrument); sd = math.sqrt(max(s2) * _spread(self.a, Tend))
+            move = -math.expm1(-self.a * Tend) * max(abs(b.min() - self.r0), abs(b.max() - self.r0))
+            L = width or 8 * sd + move
             grid = Grid1D(self.r0 - L, self.r0 + L, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift, Adiff = self.a * D1, 0.5 * D2
@@ -60,7 +132,7 @@ class SwitchingVasicek(SwitchingModel):
         r = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(r)))
-        g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0)
+        g, gfuncs, Bc = vasicek_terminal(self.a, self.b, self.sigma, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
         return avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(r, float)[None, :])
 
@@ -77,8 +149,10 @@ class SwitchingVasicekJumps(SwitchingModel):
     def __init__(self, chain, r0, a, b, sigma, jumpIntensity, jumpMean):
         super().__init__(chain)
         self.r0, self.a, self.jumpMean = float(r0), float(a), float(jumpMean)
-        self.b, self.sigma = _per_regime(b, self.n), _per_regime(sigma, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.b, self.sigma = _per_regime(b, self.n, "b"), _per_regime(sigma, self.n, "sigma")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
+        _nonnegative(self.jumpIntensity, "jumpIntensity")              # a Poisson rate; zero is the no-jump limit
+        _nonnegative(self.jumpMean, "jumpMean")                        # exponential jump sizes: a negative mean has no law
 
     def bondForcing(self, T):
         g, gfuncs, pre = _m.vasicek_jumps(self.a, self.b, self.sigma, self.jumpIntensity, self.jumpMean, T)
@@ -87,10 +161,13 @@ class SwitchingVasicekJumps(SwitchingModel):
 
 class SwitchingCoxIngersollRoss(SwitchingModel):
     """QuantLib CoxIngersollRoss(r0, theta, k, sigma): dr = k (theta - r) dt + sigma sqrt(r) dW. theta may switch."""
+    _diffusion, _switching = (), ("theta",)          # see regimelib.information
+
     def __init__(self, chain, r0, theta, k, sigma):
         super().__init__(chain)
         self.r0, self.k, self.sigma = float(r0), float(k), float(sigma)
-        self.theta = _per_regime(theta, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        _nonnegative(self.r0, "r0"); _nonnegative(self.theta, "theta")  # the square-root diffusion lives on r >= 0
 
     def bondForcing(self, T):
         g, gfuncs, pre, B = _m.cir_switching_mean(self.k, self.theta, self.sigma, T)
@@ -104,7 +181,11 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            top = width or max(self.r0, th.max()) + 10 * self.sigma * math.sqrt(max(self.r0, th.max()) / (2 * self.k))
+            # by the last decision the mean has moved a fraction 1 - e^{-k T} of the way to the highest level, whatever
+            # the regime path: size the grid from there, not from the level itself
+            Tend = _lastDecision(instrument)
+            level = self.r0 + max(th.max() - self.r0, 0.0) * -math.expm1(-self.k * Tend)
+            top = width or level + 10 * self.sigma * math.sqrt(level * _spread(self.k, Tend))
             grid = Grid1D(0.0, top, n)
         D1, D2 = grid.d1(), grid.d2(); r = grid.x
         Adrift = self.k * D1
@@ -128,10 +209,12 @@ class SwitchingCoxIngersollRoss(SwitchingModel):
 # ---------------------------------------------------------------- equity models: characteristic functions
 class SwitchingBlackScholesProcess(SwitchingModel):
     """QuantLib BlackScholesMertonProcess with a constant rate r, dividend yield q and volatility sigma; sigma may switch."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, S0, r, q, sigma):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma = _per_regime(sigma, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -158,7 +241,8 @@ class SwitchingHestonModel(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.sigma, self.rho = float(kappa), float(sigma), float(rho)
-        self.theta = _per_regime(theta, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        _correlation(self.rho); _nonnegative(self.v0, "v0"); _nonnegative(self.theta, "theta")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -173,9 +257,12 @@ class SwitchingMerton76Process(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma, jumpIntensity, logJumpMean, logJumpVol):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma = _per_regime(sigma, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        if not math.isfinite(self.logJumpMean):
+            raise ValueError("logJumpMean must be finite")
+        _nonnegative(self.jumpIntensity, "jumpIntensity")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -192,9 +279,13 @@ class SwitchingBatesModel(SwitchingModel):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.sigma, self.rho = float(kappa), float(sigma), float(rho)
-        self.theta = _per_regime(theta, self.n)
-        self.jumpIntensity = _per_regime(jumpIntensity, self.n)
+        self.theta = _per_regime(theta, self.n, "theta")
+        self.jumpIntensity = _per_regime(jumpIntensity, self.n, "jumpIntensity")
         self.logJumpMean, self.logJumpVol = float(logJumpMean), float(logJumpVol)
+        if not math.isfinite(self.logJumpMean):
+            raise ValueError("logJumpMean must be finite")
+        _correlation(self.rho); _nonnegative(self.v0, "v0"); _nonnegative(self.theta, "theta")
+        _nonnegative(self.jumpIntensity, "jumpIntensity")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -210,7 +301,17 @@ class SwitchingVarianceGammaProcess(SwitchingModel):
     def __init__(self, chain, S0, r, q, sigma, nu, theta):
         super().__init__(chain)
         self.S0, self.r, self.q = float(S0), float(r), float(q)
-        self.sigma, self.nu, self.theta = _per_regime(sigma, self.n), _per_regime(nu, self.n), _per_regime(theta, self.n)
+        self.sigma, self.nu, self.theta = _per_regime(sigma, self.n, "sigma"), _per_regime(nu, self.n, "nu"), _per_regime(theta, self.n, "theta")
+        self.checkParameters()
+
+    def checkParameters(self):
+        """The constructor's conditions on the parameters as they are now (calibration moves them afterwards)."""
+        _check(self.nu, "nu", lambda v: v > 0.0, "finite and positive (as nu tends to zero the model is Black-Scholes: "
+               "use SwitchingBlackScholesProcess)")
+        for i, (sg, nu_, th) in enumerate(zip(self.sigma, self.nu, self.theta)):
+            if not (math.isfinite(sg) and math.isfinite(th)) or 1.0 - th * nu_ - 0.5 * sg * sg * nu_ <= 0.0:
+                raise ValueError("variance gamma needs finite sigma and theta with 1 - theta nu - sigma^2 nu / 2 > 0 in every "
+                                 f"regime, or E[S] is infinite and there is no martingale correction (regime {i})")
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
@@ -226,11 +327,14 @@ class SwitchingHullWhite(SwitchingModel):
     equal the model is QuantLib's and reproduces the curve exactly; with switching, the averaged model reproduces the
     curve and the expansion adds the switching corrections. termStructure: a flat rate, a callable t -> discount factor,
     or a QuantLib YieldTermStructureHandle (times in years from its reference date)."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, termStructure, a, sigma):
         super().__init__(chain)
-        self.a = float(a); self.sigma = _per_regime(sigma, self.n)
+        self.a = float(a); self.sigma = _per_regime(sigma, self.n, "sigma")
         if np.isscalar(termStructure):
-            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+            from .instruments import FlatCurve
+            self.discount = FlatCurve(termStructure)
         elif hasattr(termStructure, "discount"):
             ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
         else:
@@ -246,20 +350,20 @@ class SwitchingHullWhite(SwitchingModel):
         s2bar = float(pi @ np.asarray(self.sigma) ** 2)
         # r = x + phi(t), dx = -a x dt + sigma dW, x0 = 0; phi = f(0,t) + s2bar (1 - e^{-a t})^2 / (2 a^2)
         # P(0,T) = exp(-int phi) a_i(T) with g_i = sigma_i^2 B^2 / 2, B = (1 - e^{-a t}) / a
-        B = ExpSum({0: 1 / a, a: -1 / a})
+        B, Bf = _m.loading(a, 0.0, T)                              # a Chebyshev series when a T is small, B = t at a = 0
         g = [(B * B).scale(0.5 * s * s) for s in self.sigma]
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
-        pre = lambda t: self.discount(t) * math.exp(-self._intShift(t))
+        gfuncs = [(lambda s: (lambda t: 0.5 * s * s * Bf(t) ** 2))(s) for s in self.sigma]
+        pre = lambda t: self.discount(t) * _convexity(self._intShift(t))
         return g, gfuncs, pre
 
     def _intShift(self, t):
         """int_0^t of the averaged variance term of phi: s2bar (1 - e^{-a s})^2 / (2 a^2) integrated."""
         a = self.a; pi = self.chain.stationaryDistribution(); s2bar = float(pi @ np.asarray(self.sigma) ** 2)
-        return s2bar / (2 * a * a) * (t - 2 * (1 - math.exp(-a * t)) / a + (1 - math.exp(-2 * a * t)) / (2 * a))
+        return 0.5 * s2bar * _m.int_B2(a, t)                       # s2bar T^3 / 6 in the Ho-Lee limit a = 0
 
     def deterministicDiscount(self, t1, t2):
         """exp(-int_{t1}^{t2} phi), the discounting carried by the fitted drift rather than by the factor x."""
-        return self.discount(t2) / self.discount(t1) * math.exp(-(self._intShift(t2) - self._intShift(t1)))
+        return self.discount(t2) / self.discount(t1) * _convexity(self._intShift(t2)) / _convexity(self._intShift(t1))
 
     def operators(self, instrument, n, width, stretch=None):
         """Grid in the zero-mean factor x (r = x + phi(t)); L_i = -a x d_x + sigma_i^2 / 2 d_xx - x, the phi part of the
@@ -269,7 +373,9 @@ class SwitchingHullWhite(SwitchingModel):
         if isinstance(width, tuple):
             grid = Grid1D(width[0], width[1], n)
         else:
-            L = width or 8 * math.sqrt(max(s2) / (2 * self.a))
+            # the factor's variance by the last decision, not its stationary sigma^2 / (2a): over a short horizon that
+            # is far wider than the factor travels, and as a -> 0 it diverges
+            L = width or 8 * math.sqrt(max(s2) * _m.ou_variance(self.a, _lastDecision(instrument)))
             grid = Grid1D(-L, L, n)
         D1, D2 = grid.d1(), grid.d2(); x = grid.x
         Adiff = 0.5 * D2
@@ -283,7 +389,7 @@ class SwitchingHullWhite(SwitchingModel):
         x = grid.x; tau = S - t
         if tau <= 0:
             return np.ones((self.n, len(x)))
-        g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0)
+        g, gfuncs, Bc = vasicek_terminal(self.a, [0.0] * self.n, self.sigma, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gfuncs, tau).real
         return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Bc.value(tau) * np.asarray(x, float)[None, :])
 
@@ -292,12 +398,17 @@ class SwitchingG2(SwitchingModel):
     """QuantLib G2(termStructure, a, sigma, b, eta, rho): r = x + y + phi(t), dx = -a x dt + sigma dW1,
     dy = -b y dt + eta dW2, corr rho, phi(t) fitted to the initial curve. sigma, eta and rho may switch; phi is fitted
     with the stationary-average covariance, so with every regime equal the model is QuantLib's."""
+    _diffusion, _switching = ("sigma", "eta", "rho"), ("sigma", "eta", "rho")          # see regimelib.information
+    defaultGrid = (161, 81)                            # nodes in the two factors when an engine is given none
+
     def __init__(self, chain, termStructure, a, sigma, b, eta, rho):
         super().__init__(chain)
         self.a, self.b = float(a), float(b)
-        self.sigma, self.eta, self.rho = _per_regime(sigma, self.n), _per_regime(eta, self.n), _per_regime(rho, self.n)
+        self.sigma, self.eta, self.rho = _per_regime(sigma, self.n, "sigma"), _per_regime(eta, self.n, "eta"), _per_regime(rho, self.n, "rho")
+        _correlation(self.rho)
         if np.isscalar(termStructure):
-            r = float(termStructure); self.discount = lambda t: math.exp(-r * t)
+            from .instruments import FlatCurve
+            self.discount = FlatCurve(termStructure)
         elif hasattr(termStructure, "discount"):
             ts = termStructure; self.discount = lambda t: float(ts.discount(float(t)))
         else:
@@ -305,15 +416,16 @@ class SwitchingG2(SwitchingModel):
 
     def bondForcing(self, T):
         a, b = self.a, self.b; pi = self.chain.stationaryDistribution()
-        Bx, By = ExpSum({0: 1 / a, a: -1 / a}), ExpSum({0: 1 / b, b: -1 / b})
-        g, cov_bar = [], ExpSum()
+        (Bx, fx), (By, fy) = _m.loadings([(a, 0.0), (b, 0.0)], T)       # Chebyshev series when a T or b T is small
+        g, cov_bar = [], None
         for i in range(self.n):
             s, e, r = self.sigma[i], self.eta[i], self.rho[i]
             gi = (Bx * Bx).scale(0.5 * s * s) + (By * By).scale(0.5 * e * e) + (Bx * By).scale(r * s * e)
-            g.append(gi); cov_bar = cov_bar + gi.scale(pi[i])
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+            g.append(gi); cov_bar = gi.scale(pi[i]) if cov_bar is None else cov_bar + gi.scale(pi[i])
+        gfuncs = [(lambda s, e, r: (lambda t: 0.5 * s * s * fx(t) ** 2 + 0.5 * e * e * fy(t) ** 2 + r * s * e * fx(t) * fy(t)))(
+            self.sigma[i], self.eta[i], self.rho[i]) for i in range(self.n)]
         # phi absorbs the averaged variance term so that the averaged model reproduces the curve: P = D(t) e^{-int cov_bar} a
-        pre = lambda t: self.discount(t) * math.exp(-cov_bar.integral(t))
+        pre = lambda t: self.discount(t) * _convexity(cov_bar.integral(t))
         return g, gfuncs, pre
 
     def deterministicDiscount(self, t1, t2):
@@ -332,8 +444,8 @@ class SwitchingG2(SwitchingModel):
         nx, ny = (n, n) if np.isscalar(n) else n
         if width is None:                                                  # six standard deviations at the last exercise
             Tend = max(getattr(instrument, "exerciseTimes", None) or [instrument.maturity])
-            sdx = math.sqrt(max(sig ** 2) * (1 - math.exp(-2 * self.a * Tend)) / (2 * self.a))
-            sdy = math.sqrt(max(eta ** 2) * (1 - math.exp(-2 * self.b * Tend)) / (2 * self.b))
+            sdx = math.sqrt(max(sig ** 2) * _m.ou_variance(self.a, Tend))
+            sdy = math.sqrt(max(eta ** 2) * _m.ou_variance(self.b, Tend))
             Lx, Ly = 6 * sdx, 6 * sdy
         else:
             Lx, Ly = (width, width) if np.isscalar(width) else width
@@ -350,9 +462,9 @@ class SwitchingG2(SwitchingModel):
         tau = S - t
         if tau <= 0:
             return np.ones((self.n, grid.n))
-        g, gf = _g2_forcing(self.a, self.b, self.sigma, self.eta, self.rho, 0.0, 0.0)
+        g, gf = _g2_forcing(self.a, self.b, self.sigma, self.eta, self.rho, 0.0, 0.0, tau)
         avec = _numericalAVector(self.chain.generator, g, gf, tau).real
-        Ba, Bb = (1 - math.exp(-self.a * tau)) / self.a, (1 - math.exp(-self.b * tau)) / self.b
+        Ba, Bb = _m.stable_B(self.a, tau), _m.stable_B(self.b, tau)
         return self.deterministicDiscount(t, S) * avec[:, None] * np.exp(-Ba * grid.X - Bb * grid.V)[None, :]
 
 
@@ -361,32 +473,42 @@ class SwitchingHestonVolOfVol(SwitchingModel):
     rho) with sigma = xi per regime). The switched operators v d_vv / 2 and rho v d_xv do not reduce exactly, so this
     model lives in the first-order tier: FirstOrderFDEngine on the (log S, v) grid, SwitchingFDReferee for the
     switching solution."""
+    _diffusion, _switching = ("xi",), ("xi",)          # see regimelib.information
+    defaultGrid = (151, 61)                            # (log price, variance) nodes when an engine is given none
+
     def __init__(self, chain, S0, r, q, v0, kappa, theta, xi, rho):
         super().__init__(chain)
         self.S0, self.r, self.q, self.v0 = float(S0), float(r), float(q), float(v0)
         self.kappa, self.theta, self.rho = float(kappa), float(theta), float(rho)
-        self.xi = _per_regime(xi, self.n)
+        self.xi = _per_regime(xi, self.n, "xi")
+        _correlation(self.rho)
 
     def forward(self, T):
         return self.S0 * math.exp((self.r - self.q) * T)
 
     def operators(self, instrument, n, width, stretch=None):
-        """n is (nx, nv) or a single count used for both; width the half-width in log price (and v_max as a multiple
-        of max(v0, theta) is fixed at 5). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
+        """n is (nx, nv) or a single count used for both; width the half-width in log price (v_max is five times
+        max(v0, theta), or five standard deviations of v_T above it if that is more). L = (r - q - v/2) d_x + v/2 d_xx + kappa (theta - v) d_v
         + xi_bar^2 v/2 d_vv + rho xi_bar v d_xv - r; the switched forcings are xi^2 on v d_vv / 2 and xi on rho v d_xv."""
         from .firstorder import Grid2D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
         xi = np.asarray(self.xi, float); xibar, xi2bar = float(pi @ xi), float(pi @ xi ** 2)
         nx, nv = (n, n) if np.isscalar(n) else n
         vtop = max(self.v0, self.theta); L = width or 6 * math.sqrt(vtop * T) + 2 * abs(self.r - self.q) * T
-        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, 5 * vtop, nv, centers=(math.log(K), self.v0), stretch=stretch)
+        # the variance's stationary spread is sqrt(theta xi^2 / (2 kappa)): a large vol-of-vol reaches well past 5 max(v0, theta)
+        # and from v0 it spreads on the way: Var v_T = v0 xi^2 (e^{-kappa T} - e^{-2 kappa T}) / kappa
+        # + theta xi^2 (1 - e^{-kappa T})^2 / (2 kappa), the stationary spread only as T grows
+        k = self.kappa; onTheWay = (math.exp(-k * T) - math.exp(-2 * k * T)) / k if k > 0 else T
+        settled = self.theta * xi2bar * math.expm1(-k * T) ** 2 / (2 * k) if k > 0 else 0.0
+        spread = math.sqrt(self.v0 * xi2bar * onTheWay + settled)
+        vmax = max(5 * vtop, vtop + 5 * spread)
+        x0 = math.log(self.S0); grid = Grid2D(x0 - L, x0 + L, nx, 0.0, vmax, nv, centers=(math.log(K), self.v0), stretch=stretch)
         V = sp.diags(grid.V); I = sp.identity(grid.n, format="csr")
         A1 = 0.5 * V @ grid.d2v                                        # multiplies xi^2
-        A2 = self.rho * V @ grid.d1xv                                  # multiplies xi
+        A2 = self.rho * V @ grid.cross(np.sign(self.rho))              # multiplies xi
         Lbar = (sp.diags(self.r - self.q - 0.5 * grid.V) @ grid.d1x + 0.5 * V @ grid.d2x
                 + sp.diags(self.kappa * (self.theta - grid.V)) @ grid.d1v + xi2bar * A1 + xibar * A2 - self.r * I)
-        S = np.exp(grid.X)
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(np.exp(grid.X))
         return Lbar, [A1, A2], [xi ** 2, xi], grid, u0, (x0, self.v0)
 
 
@@ -396,7 +518,12 @@ class SwitchingIntensityBasket(SwitchingModel):
     by the same regime chain, with independent diffusions. The joint survival E exp(-int sum_k lambda^k) is the
     bond of the summed forcing with the product of the prefactors, so ZeroCouponBond(t) is the probability that no
     name has defaulted by t and CreditDefaultSwap is a first-to-default swap. The common regime is the only source
-    of dependence: defaultCorrelation(t) measures it."""
+    of dependence: defaultCorrelation(t) measures it.
+
+    A Vasicek intensity is Gaussian and so negative with positive probability. It is the Ornstein-Uhlenbeck hazard of
+    the fast-switching literature and is accurate when the volatility is small against the level; when it is not, the
+    "survival probability" can exceed one, and the engines warn (IntensityWarning). A Cox-Ingersoll-Ross intensity
+    stays nonnegative."""
     def __init__(self, models):
         chain = models[0].chain
         if any(m.chain is not chain for m in models):
@@ -409,7 +536,8 @@ class SwitchingIntensityBasket(SwitchingModel):
         if len({type(p[0][0]) for p in parts}) > 1:                    # exponential sums and Chebyshev series: fit all
             parts = [([Cheb.fit(gf, T, 80) for gf in p[1]], p[1], p[2]) for p in parts]
         g = [sum((p[0][i] for p in parts[1:]), parts[0][0][i]) for i in range(self.n)]
-        gfuncs = [(lambda gi: (lambda t: gi.value(t)))(gi) for gi in g]
+        # the numerical engine integrates the names' own functions, not the series fitted for the expansion
+        gfuncs = [(lambda fs: (lambda t: sum(f(t) for f in fs)))([p[1][i] for p in parts]) for i in range(self.n)]
         pres = [p[2] for p in parts]
         return g, gfuncs, (lambda t: math.prod(pre(t) for pre in pres))
 
@@ -418,9 +546,12 @@ class SwitchingIntensityBasket(SwitchingModel):
         from .engines import NumericalSwitchingEngine
         from .instruments import ZeroCouponBond
         def surv(model):
-            b = ZeroCouponBond(t); b.setPricingEngine(NumericalSwitchingEngine(model, regime=regime)); return b.NPV()
+            return NumericalSwitchingEngine(model, regime=regime)._survival(t)
         q1, q2, q12 = surv(self.models[0]), surv(self.models[1]), surv(SwitchingIntensityBasket(self.models[:2]))
-        return (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))
+        if not (1e-10 < q1 < 1 - 1e-10 and 1e-10 < q2 < 1 - 1e-10):
+            raise ValueError(f"the survival probabilities to t = {t:g} are {q1:.3g} and {q2:.3g}: a default indicator "
+                             "that is all but certain has no variance to correlate, within what the solver resolves")
+        return min(1.0, max(-1.0, (q12 - q1 * q2) / math.sqrt(q1 * (1 - q1) * q2 * (1 - q2))))
 
 
 # ---------------------------------------------------------------- operator form for the first-order tier
@@ -435,6 +566,22 @@ def _bs_operators(self, instrument, n, width, stretch=None):
     else:
         L = width or 8 * math.sqrt(max(s2) * T) + 2 * abs(self.r - self.q) * T
         grid = Grid1D(x0 - L, x0 + L, n)
+    # centred differences are monotone while the drift over a cell is at most the diffusion across it (a cell Peclet
+    # number of two). Past that the carry dominates and the scheme oscillates and misprices without a sign of it
+    quiet = float(np.min(s2[s2 > 0])) if np.any(s2 > 0) else 0.0
+    if quiet > 0.0 and np.any(s2 == 0.0) and self.r != self.q:
+        # the limit of the test below: with no diffusion in a regime its row is carry alone, at any grid size
+        raise ValueError(f"a regime with zero volatility beside regimes that diffuse, with a carry of "
+                         f"{self.r - self.q:.3g}: that regime's equation is pure advection (an infinite cell Peclet "
+                         "number), which centred differences misprice on any grid. This case is not priced; a small "
+                         "positive volatility there is, on a grid fine enough for it.")
+    if quiet > 0.0:
+        peclet = abs(self.r - self.q - 0.5 * quiet) * float(np.max(np.diff(grid.x))) / (0.5 * quiet)
+        if peclet > 2.0:
+            raise ValueError(f"the grid is too coarse for a volatility of {math.sqrt(quiet):.3g} against a carry of "
+                             f"{self.r - self.q:.3g}: the cell Peclet number is {peclet:.3g} (above 2), and centred "
+                             f"differences misprice there. Use about {int(n * peclet / 2) + 1} points, or a "
+                             "characteristic-function engine.")
     D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr")
     A = 0.5 * (D2 - D1)
     Lbar = (self.r - self.q) * D1 + s2bar * A - self.r * I
@@ -448,20 +595,39 @@ SwitchingBlackScholesProcess.operators = _bs_operators
 class SwitchingCEVProcess(SwitchingModel):
     """dS = (r - q) S dt + sigma_y S^beta dW (QuantLib CEV process parameters S0, r, q, sigma, beta); sigma switches.
     Non-affine: the switched sigma^2 multiplies A = S^{2 beta} d_SS / 2, which does not commute with the drift."""
+    _diffusion, _switching = ("sigma",), ("sigma",)          # see regimelib.information
+
     def __init__(self, chain, S0, r, q, sigma, beta):
         super().__init__(chain)
         self.S0, self.r, self.q, self.beta = float(S0), float(r), float(q), float(beta)
-        self.sigma = _per_regime(sigma, self.n)
+        self.sigma = _per_regime(sigma, self.n, "sigma")
 
     def operators(self, instrument, n, width, stretch=None):
         from .firstorder import Grid1D
         T, K = instrument.maturity, instrument.strike; pi = self.chain.stationaryDistribution()
+        if K <= 0:
+            raise ValueError("the CEV price can reach zero and stay there, which a grid cut off above zero does not "
+                             "carry; a strike at or below zero is not priced under this model")
         s2 = np.asarray(self.sigma) ** 2; s2bar = float(pi @ s2)
         vol_eff = math.sqrt(max(s2)) * self.S0 ** (self.beta - 1)
         L = width or 6 * vol_eff * math.sqrt(T) * self.S0 + 2 * abs(self.r - self.q) * T * self.S0
         grid = Grid1D(width[0], width[1], n) if isinstance(width, tuple) else Grid1D(max(self.S0 - L, 1e-8), self.S0 + L, n)
+        # the Black-Scholes test (see _bs_operators) at the spot and the strike: the carry over a cell against the
+        # diffusion across it in the quietest regime
+        quiet = float(np.min(s2[s2 > 0])) if np.any(s2 > 0) else 0.0
+        if quiet > 0.0 and self.r != self.q:
+            if np.any(s2 == 0.0):
+                raise ValueError(f"a regime with zero volatility beside regimes that diffuse, with a carry of "
+                                 f"{self.r - self.q:.3g}: that regime's equation is pure advection (an infinite cell "
+                                 "Peclet number), which centred differences misprice on any grid. This case is not priced.")
+            h = float(np.max(np.diff(grid.x)))
+            peclet = max(abs(self.r - self.q) * s * h / (0.5 * quiet * s ** (2 * self.beta)) for s in (self.S0, K))
+            if peclet > 2.0:
+                raise ValueError(f"the grid is too coarse for a volatility coefficient of {math.sqrt(quiet):.3g} against a "
+                                 f"carry of {self.r - self.q:.3g}: the cell Peclet number is {peclet:.3g} (above 2), and "
+                                 f"centred differences misprice there. Use about {int(n * peclet / 2) + 1} points.")
         D1, D2 = grid.d1(), grid.d2(); I = sp.identity(n, format="csr"); S = grid.x
         A = 0.5 * sp.diags(S ** (2 * self.beta)) @ D2
         Lbar = (self.r - self.q) * sp.diags(S) @ D1 + s2bar * A - self.r * I
-        u0 = np.maximum(S - K, 0.0) if instrument.isCall else np.maximum(K - S, 0.0)
+        u0 = instrument.payoffOnGrid(S)
         return Lbar, [A], [s2], grid, u0, self.S0

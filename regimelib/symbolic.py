@@ -4,7 +4,7 @@ Two regimes switching at rate lam each way, Vasicek short rate dr = kappa (theta
 bond to second order in eps = 1 / lam (the regime-switching page of homogenization.microprediction.org):
 
     log P_{1,2}(T) = -B r0 + int_0^T gbar + (eps/2) int_0^T gt^2 - (eps^2/8) gt(T)^2
-                     + log(1 +/- (eps/2) gt(T) -/+ (eps^2/4) gt'(T)),
+                     + log(1 +/- (eps/2) gt(T) -/+ (eps^2/4) (gt'(T) - gt'(0) e^{-2 lam T})),
     g_i = -kappa theta_i B + sigma_i^2 B^2 / 2,  gbar = (g_1 + g_2)/2,  gt = (g_1 - g_2)/2,  B = (1 - e^{-kappa T}) / kappa,
 
 with the upper sign for a start in regime 1. Every greek is sympy.diff of this expression."""
@@ -12,6 +12,31 @@ import sympy as sp
 
 r0, kappa, th1, th2, s1, s2, lam, T = sp.symbols("r_0 kappa theta_1 theta_2 sigma_1 sigma_2 lambda T", positive=True)
 t = sp.symbols("t", positive=True)
+
+DIGITS = 50          # the working precision of evaluate()
+SMALL = 1e-4         # the smallest kappa T, sigma T or m T at which a formula is evaluated
+
+
+def _evaluate(self, expr, values, small=()):
+    """The antiderivatives divide by powers of kappa (and of sigma, or of the jump mean), and their terms cancel: the
+    formula is right and double precision loses it long before the parameter is small. So a formula is evaluated at
+    DIGITS digits, and refused where the parameter is so small that the cancellation outruns those; the limit is a
+    different formula (no reversion, no diffusion, no jumps), and the engines price it."""
+    import mpmath
+    for name in small:
+        if not abs(values[name]) * values["T"] >= SMALL:
+            raise ValueError(f"{type(self).__name__} is not evaluated at {name} T = {abs(values[name]) * values['T']:.3g} "
+                             f"(below {SMALL:g}): the formula divides by powers of {name} and its terms cancel. "
+                             "Price with FastSwitchingEngine(model, order=1), which takes the limit.")
+    key = sp.srepr(expr)
+    if key not in self._fn:
+        self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "mpmath")
+    with mpmath.workdps(DIGITS):
+        v = self._fn[key](*[mpmath.mpc(values[n]) for n in self.symbols])
+        # logarithms of the antiderivatives can have negative arguments between the limits; their imaginary parts cancel
+        if not abs(mpmath.im(v)) < 1e-9 * max(1.0, abs(mpmath.re(v))):
+            raise ArithmeticError("imaginary parts did not cancel")
+        return float(mpmath.re(v))
 
 
 class VasicekTwoStateBond:
@@ -27,7 +52,7 @@ class VasicekTwoStateBond:
         eps = 1 / lam
         I_gbar = sp.integrate(sp.expand(gbar), (t, 0, T))
         I_gt2 = sp.integrate(sp.expand(gt ** 2), (t, 0, T))
-        gtT, gtpT = gt.subs(t, T), sp.diff(gt, t).subs(t, T)
+        gtT, gtpT, gtp0 = gt.subs(t, T), sp.diff(gt, t).subs(t, T), sp.diff(gt, t).subs(t, 0)
         BT = B.subs(t, T)
         # the terms of log P, kept apart so that a greek can be read term by term
         self.terms = {
@@ -35,7 +60,8 @@ class VasicekTwoStateBond:
             "averaged": I_gbar,                                         # the averaged Vasicek exponent
             "green_kubo": eps / 2 * I_gt2,                              # (eps/2) int gt^2: the first-order term
             "second_order": -eps ** 2 / 8 * gtT ** 2,                   # -(eps^2/8) gt(T)^2
-            "memory": sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * gtpT),   # the starting regime
+            # the starting regime, with the initial layer that makes it nothing at T = 0 (gt(0) = 0 here)
+            "memory": sp.log(1 + sign * eps / 2 * gtT - sign * eps ** 2 / 4 * (gtpT - gtp0 * sp.exp(-2 * lam * T))),
         }
         self.B, self.gt, self.gbar = BT, gt, gbar
         self.logPrice = sum(self.terms.values())
@@ -62,10 +88,7 @@ class VasicekTwoStateBond:
         return out
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("kappa",))
 
     # QuantLib-named conveniences, as formulas
     def delta(self): return self.greek("r0")
@@ -166,10 +189,7 @@ class VasicekBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("kappa",))
 
 
 # ---------------------------------------------------------------- two states, constant forcing: exact, all orders
@@ -181,7 +201,7 @@ class TwoStateConstantForcing:
         a(T) = [e^{mu+ T} (M - mu- I) - e^{mu- T} (M - mu+ I)] 1 / (mu+ - mu-).
 
     `a(regime)` is that formula as a sympy expression in q12, q21, g1, g2, T; the characteristic function of a
-    switching Black-Scholes log return is `blackScholes(regime)` with g_i = -u^2 sigma_i^2 / 2 for the martingale
+    switching Black-Scholes log return is `blackScholes(regime)` with g_i = -u (u + i) sigma_i^2 / 2 for the martingale
     return and u kept symbolic, so that d/du under Lewis's integral gives the greeks in closed form."""
     q12, q21, g1, g2, T, u, s1, s2 = sp.symbols("q12 q21 g1 g2 T u sigma1 sigma2")
     symbols = dict(q12=q12, q21=q21, g1=g1, g2=g2, T=T)
@@ -211,7 +231,14 @@ class TwoStateConstantForcing:
             names = sorted(str(s) for s in expr.free_symbols)
             self._fn[key] = (names, sp.lambdify([sp.Symbol(n) for n in names], expr, "mpmath"))
         names, f = self._fn[key]
-        return complex(f(*[values[n] for n in names]))
+        import mpmath
+        try:                                                 # the discriminant cancels as the eigenvalues approach each
+            with mpmath.workdps(DIGITS):                     # other: at DIGITS digits, as the other formulas here
+                return complex(f(*[mpmath.mpmathify(values[n]) for n in names]))
+        except ZeroDivisionError:
+            raise ValueError("the two eigenvalues of Q + diag g coincide at these values, where this formula divides by "
+                             "their difference; the limit is e^{mu T} (I + T (M - mu I)) 1. Move a parameter slightly, "
+                             "or use NumericalSwitchingEngine.") from None
 
 
 # ---------------------------------------------------------------- CIR with a switching mean level, first order
@@ -231,9 +258,9 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
     def __init__(self):
         k, sig = self.k_, self.sig_
         h = sp.sqrt(k ** 2 + 2 * sig ** 2)
-        E = sp.exp(h * T)
-        BT = 2 * (E - 1) / ((h + k) * (E - 1) + 2 * h)
-        logA = sp.log(2 * h * sp.exp((h + k) * T / 2) / ((h + k) * (E - 1) + 2 * h))
+        q = sp.exp(-h * T)                                    # in e^{-hT}, which does not overflow at long maturities
+        BT = 2 * (1 - q) / ((h + k) * (1 - q) + 2 * h * q)
+        logA = sp.log(2 * h) + (k - h) * T / 2 - sp.log((h + k) * (1 - q) + 2 * h * q)
         I = {1: -2 / sig ** 2 * logA}
         I[2] = 2 / sig ** 2 * (T - k * I[1] - BT)
         self.h, self.B = h, BT
@@ -254,6 +281,11 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
         import numpy as np
         return ["theta"], np.array([-k * np.asarray(thetas, float)]), {"theta": lambda i, k, **kw: -k}
 
+    def parameterGreek(self, chain, wrt, regime=0, **params):
+        if params.get("k") == 0:                                         # dr = sigma sqrt(r) dW: neither the levels nor the
+            return 0.0                                                   # chain enter the law of the rate
+        return super().parameterGreek(chain, wrt, regime=regime, **params)
+
     @staticmethod
     def coefficientsFrom(pi, K, M, F, regime, dF=None, basePi=None, linear=False, **kw):
         import numpy as np
@@ -271,10 +303,7 @@ class CIRBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "math")
-        return float(self._fn[key](*[values[n] for n in self.symbols]))
+        return _evaluate(self, expr, values, small=("sigma",))
 
 
 # ---------------------------------------------------------------- Vasicek with jumps at a switching intensity, first order
@@ -346,12 +375,4 @@ class VasicekJumpsBondFirstOrder(_FirstOrderParameterGreeks):
         return e
 
     def evaluate(self, expr, **values):
-        """The antiderivatives carry logarithms whose arguments can be negative between the limits; their imaginary
-        parts cancel, so the expression is evaluated in complex arithmetic and the real part returned."""
-        key = sp.srepr(expr)
-        if key not in self._fn:
-            self._fn[key] = sp.lambdify(list(self.symbols.values()), expr, "mpmath")
-        import mpmath
-        v = self._fn[key](*[mpmath.mpc(values[n]) for n in self.symbols])
-        assert abs(mpmath.im(v)) < 1e-9 * max(1.0, abs(mpmath.re(v))), "imaginary parts did not cancel"
-        return float(mpmath.re(v))
+        return _evaluate(self, expr, values, small=("kappa", "m"))

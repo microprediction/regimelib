@@ -45,3 +45,34 @@ def test_switching_intensity_fair_spread_between_regimes():
     sw = rl.SwitchingVasicek(rl.RegimeChain.twoState(1.0, 1.0), 0.01, 0.5, [0.01, 0.05], 0.002)
     s0, s1 = fair(sw, 0), fair(sw, 1)
     assert lo < s0 < s1 < hi
+
+
+def test_zero_spread_cds_has_a_fair_spread():
+    """The fair spread is the protection leg over the premium annuity, which does not involve the contractual spread."""
+    model = rl.SwitchingCoxIngersollRoss(rl.RegimeChain.twoState(3.0, 5.0), 0.02, 0.03, 0.5, 0.08)
+    engine = rl.NumericalSwitchingEngine(model)
+    times = [0.5, 1.0, 1.5, 2.0]
+    for accrual in (True, False):
+        ref = rl.CreditDefaultSwap("buyer", 0.01, times, 0.4, discount=0.03, accrualOnDefault=accrual); ref.setPricingEngine(engine)
+        for side, sign in (("buyer", 1.0), ("seller", -1.0)):
+            zero = rl.CreditDefaultSwap(side, 0.0, times, 0.4, discount=0.03, accrualOnDefault=accrual); zero.setPricingEngine(engine)
+            assert zero.fairSpread() == pytest.approx(ref.fairSpread(), rel=1e-12)
+            assert zero.couponLegNPV() == 0.0
+            assert zero.NPV() == pytest.approx(sign * ref.defaultLegNPV(), rel=1e-12)
+
+
+def test_gaussian_intensity_above_one_is_reported():
+    """A Vasicek intensity is allowed; when its volatility makes the survival probability exceed one, the engine says so."""
+    import warnings
+    chain = rl.RegimeChain.twoState(3.0, 5.0)
+    wild = rl.SwitchingIntensityBasket([rl.SwitchingVasicek(chain, 0.02, 0.5, 0.02, 0.20) for _ in range(2)])
+    swap = rl.FirstToDefaultSwap("buyer", 0.01, [0.5 * i for i in range(1, 11)], 0.4, discount=0.03)
+    swap.setPricingEngine(rl.NumericalSwitchingEngine(wild))
+    with pytest.warns(rl.IntensityWarning, match="above one"):
+        swap.NPV()
+    tame = rl.SwitchingIntensityBasket([rl.SwitchingVasicek(chain, 0.02, 0.5, [0.01, 0.06], 0.003) for _ in range(2)])
+    swap.setPricingEngine(rl.NumericalSwitchingEngine(tame))
+    with warnings.catch_warnings():
+        warnings.simplefilter("error", rl.IntensityWarning)
+        assert swap.fairSpread() > 0
+        tame.defaultCorrelation(5.0)

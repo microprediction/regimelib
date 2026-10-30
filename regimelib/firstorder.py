@@ -3,14 +3,17 @@
 u_t = (L_bar + sum_j f~_j(y) A_j) u. To first order in the holding time,
     u(T) = e^{T L_bar} u0 + int_0^T e^{(T - s) L_bar} (sum_jk K_jk A_j A_k) e^{s L_bar} u0 ds + memory,
 K the Green-Kubo matrix of the chain (integral of the autocovariance of the coefficients) and the memory term
--(Q# f~)_i . A e^{T L_bar} u0 for a start in regime i. The Duhamel integral is the second block of one matrix
+-((I - e^{QT}) Q# f~)_i . A e^{T L_bar} u0 for a start in regime i (the e^{QT} part is the initial layer). The Duhamel integral is the second block of one matrix
 exponential of [[L_bar, 0], [K A A, L_bar]] applied to (u0, 0). Finite differences on a grid the model supplies."""
 import math
 import warnings
 import numpy as np
 import scipy.sparse as sp
 from scipy.sparse.linalg import expm_multiply
-from .instruments import VanillaOption
+from .instruments import VanillaOption, rejectFeatures
+
+_PATH_FEATURES = ("American exercise", "a barrier", "geometric averaging")
+from .information import startingBelief, byBelief
 
 
 def green_kubo(chain, f):
@@ -55,6 +58,8 @@ class Grid1D:
     around `center` by the sinh map of Tavella and Randall (`stretch` is the width of the dense region as a
     fraction of the interval; smaller is denser). Three-point stencils on the non-uniform spacing."""
     def __init__(self, lo, hi, n, center=None, stretch=None):
+        if not (math.isfinite(lo) and math.isfinite(hi)) or hi <= lo:
+            raise ValueError(f"a grid needs a finite interval with hi > lo; got [{lo}, {hi}]")
         if center is None or stretch is None:
             self.x = np.linspace(lo, hi, n)
         else:
@@ -97,24 +102,82 @@ class Grid2D:
         self.d1xv = sp.kron(self.gx.d1(), self.gv.d1(), format="csr")
         self.X, self.V = np.repeat(self.x, nv), np.tile(self.v, nx)
 
+    def cross(self, sign):
+        """d_xv for a coefficient of the given sign. The centred four-corner stencil puts a negative weight on one
+        diagonal whatever the sign, so it is never monotone and misprices when the correlation is strong. Averaging
+        the two one-sided products along the diagonal that matches the sign (u_{++} and u_{--} for a positive
+        coefficient, u_{+-} and u_{-+} for a negative one) is second order on a uniform grid and puts the negative
+        weights on the axis neighbours, where the diffusion outweighs them (Lawson's seven-point stencil). The
+        edges keep the centred one-sided form."""
+        if sign == 0:
+            return self.d1xv
+        def onesided(g):
+            h = np.diff(g.x); n = g.n
+            fwd = sp.diags([np.r_[-1 / h, 0.0], 1 / h], [0, 1], shape=(n, n), format="csr")       # last row zero
+            bwd = sp.diags([np.r_[0.0, 1 / h], -1 / h], [0, -1], shape=(n, n), format="csr")      # first row zero
+            return fwd, bwd
+        (xf, xb), (vf, vb) = onesided(self.gx), onesided(self.gv)
+        if sign > 0:
+            S = 0.5 * (sp.kron(xf, vf) + sp.kron(xb, vb))
+        else:
+            S = 0.5 * (sp.kron(xf, vb) + sp.kron(xb, vf))
+        inside = np.zeros((len(self.x), len(self.v)), bool); inside[1:-1, 1:-1] = True
+        m = inside.ravel().astype(float)
+        return (sp.diags(m) @ S + sp.diags(1.0 - m) @ self.d1xv).tocsr()
+
     def interp(self, u, p):
         from scipy.interpolate import RegularGridInterpolator
         f = RegularGridInterpolator((self.x, self.v), np.asarray(u).reshape(len(self.x), len(self.v)))
         return float(f([p])[0])
 
 
+def _gridSize(model, n, line=801):
+    """The node count when none is given: 801 on a line; for a model on a plane its own tested default, since 801 in
+    each direction is 640,000 nodes per regime. A scalar given for a plane is refused when it is that large."""
+    planar = getattr(model, "defaultGrid", None)
+    if n is None:
+        return planar or line
+    if planar is not None and np.isscalar(n) and n * n > 250000:
+        raise ValueError(f"n = {n} in each of two directions is {n * n} nodes per regime; give n as (nx, nv), e.g. {planar}")
+    return n
+
+
 class FirstOrderFDEngine:
     """First-order pricing on a grid. The model supplies operators(grid) -> (L_bar, [A_j], [f_j per regime], grid,
     payoff(grid), x0)."""
-    def __init__(self, model, regime=0, n=801, width=None, warnAbove=0.03, stretch=None):
-        self.model, self.regime, self.n, self.width, self.stretch = model, regime, n, width, stretch
+    def __init__(self, model, regime=0, n=None, width=None, warnAbove=0.03, stretch=None):
+        self.model, self.n, self.width, self.stretch = model, _gridSize(model, n), width, stretch
+        if len(model.chain.closedClasses()) > 1:
+            raise ValueError("the first-order expansion needs a chain with one stationary law; this one has "
+                             f"{len(model.chain.closedClasses())} closed classes. Use SwitchingFDReferee.")
+        self.regime, self.belief = startingBelief(regime, model.n)
         self.averaged = self.correction = self.memory = None
-        self.warnAbove = warnAbove; self.diagnostics = {}
+        self.warnAbove = warnAbove
 
+    @property
+    def diagnostics(self):
+        """Sizes of the two first-order terms against the averaged value, from the components as they stand: for a
+        starting belief those are the belief-weighted ones, so the diagnostics do not depend on how regimes are labelled."""
+        if self.averaged is None:
+            return {}
+        scale = max(abs(self.averaged), 1e-300)
+        d = dict(holdingTime=self.model.chain.meanHoldingTime(), correctionRelative=float(abs(self.correction) / scale),
+                 memoryRelative=float(abs(self.memory) / scale))
+        rel = d["correctionRelative"] + d["memoryRelative"]
+        d["estimatedError"] = rel * rel                               # the neglected second-order term, checked against the referee
+        return d
+
+    @byBelief(mean=("averaged", "correction", "memory"))
     def calculate(self, instrument):
         if not isinstance(instrument, VanillaOption):
             raise TypeError("the first-order finite-difference engine prices vanilla options")
+        rejectFeatures(instrument, "the first-order finite-difference engine", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
+        from .engines import _noDiffusion, deterministicEquity, payoffNow
+        if T == 0 or _noDiffusion(m) == "deterministic":                 # no grid to build: the terminal price is known
+            now = payoffNow(m, instrument)["value"] if T == 0 else deterministicEquity(m, instrument)
+            self.averaged, self.correction, self.memory = now, 0.0, 0.0
+            return self.averaged
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         K, M = green_kubo(m.chain, f)
         C = sum(K[j, k] * (As[j] @ As[k]) for j in range(len(As)) for k in range(len(As)))
@@ -122,13 +185,12 @@ class FirstOrderFDEngine:
         Aug = sp.bmat([[Lbar, Z], [C, Lbar]], format="csc")
         v = expm_multiply(Aug * T, np.r_[u0, np.zeros(grid.n)])
         ubar, u1 = v[:grid.n], v[grid.n:]
-        mem = sum(-M[j, self.regime] * (As[j] @ ubar) for j in range(len(As)))
+        # the memory of the starting regime, less the initial layer e^{QT} M that cancels it at T = 0
+        from scipy.linalg import expm
+        layer = expm(np.asarray(m.chain.generator) * T) @ M.T               # column j: e^{QT} M_j
+        mem = sum(-(M[j, self.regime] - layer[self.regime, j]) * (As[j] @ ubar) for j in range(len(As)))
         self.averaged, self.correction, self.memory = grid.interp(ubar, x0), grid.interp(u1, x0), grid.interp(mem, x0)
-        scale = max(abs(self.averaged), 1e-300)
-        self.diagnostics = dict(holdingTime=m.chain.meanHoldingTime(), correctionRelative=abs(self.correction) / scale,
-                                memoryRelative=abs(self.memory) / scale)
         rel = self.diagnostics["correctionRelative"] + self.diagnostics["memoryRelative"]
-        self.diagnostics["estimatedError"] = rel * rel               # the neglected second-order term, checked against the referee
         if rel > self.warnAbove:
             from .engines import ExpansionWarning
             warnings.warn(f"the first-order correction is {rel:.1e} of the averaged value (holding time "
@@ -139,11 +201,21 @@ class FirstOrderFDEngine:
 
 class SwitchingFDReferee:
     """The switching model solved without expansion on the same grid: u_i' = L_i u_i + sum_j Q_ij u_j."""
-    def __init__(self, model, regime=0, n=801, width=None, stretch=None):
-        self.model, self.regime, self.n, self.width, self.stretch = model, regime, n, width, stretch
+    def __init__(self, model, regime=0, n=None, width=None, stretch=None):
+        self.model, self.n, self.width, self.stretch = model, _gridSize(model, n), width, stretch
+        self.regime, self.belief = startingBelief(regime, model.n)
 
+    @byBelief()
     def calculate(self, instrument):
+        if not isinstance(instrument, VanillaOption):
+            raise TypeError("the switching finite-difference referee prices vanilla options")
+        rejectFeatures(instrument, "the switching finite-difference referee", _PATH_FEATURES, "SwitchingFDEngine")
         m, T = self.model, instrument.maturity
+        from .engines import _noDiffusion, deterministicEquity, payoffNow
+        if T == 0:
+            return payoffNow(m, instrument)["value"]
+        if _noDiffusion(m) == "deterministic":
+            return deterministicEquity(m, instrument)
         Lbar, As, f, grid, u0, x0 = m.operators(instrument, self.n, self.width, stretch=self.stretch)
         f = np.atleast_2d(np.asarray(f, float)); pi = m.chain.stationaryDistribution(); nR = m.n
         blocks = [[None] * nR for _ in range(nR)]

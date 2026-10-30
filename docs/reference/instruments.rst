@@ -1,8 +1,8 @@
 Instruments
 ===========
 
-The formulas behind each instrument are on the `instruments page <https://homogenization.microprediction.org/instruments.html>`_ and, for options on
-zero-coupon bonds, the `bond options page <https://homogenization.microprediction.org/bond-options.html>`_.
+The mathematics behind each instrument, with Python, is on :doc:`../models/bond_options` and
+:doc:`../models/instruments`.
 
 Instruments accept QuantLib payoff and exercise objects or plain tuples. Each entry names the QuantLib engine its
 frozen limit is checked against.
@@ -56,7 +56,9 @@ the American.
 .. function:: VanillaOption.impliedVolatility(price=None, accuracy=1e-10, maxEvaluations=200, minVol=1e-4, maxVol=4.0)
 
 The Black volatility reproducing the price (the instrument's own ``NPV()`` unless ``price`` is given), for a plain
-vanilla payoff, as QuantLib's ``VanillaOption.impliedVolatility``.
+vanilla payoff, as QuantLib's ``VanillaOption.impliedVolatility``. The search is over ``[minVol, maxVol]``;
+``maxVol=None`` widens it until the Black price reaches the target, and a price at the upper bound of the Black
+price, which no finite volatility reaches, is refused. The calibration helpers use ``maxVol=None``.
 
 .. function:: rl.BarrierOption(barrierType, barrier, rebate, payoff, exercise=None, maturity=None, dayCounter=None)
 
@@ -134,7 +136,9 @@ Protection on a unit notional with the premium ``spread`` paid at ``times``, rec
 bond price is the survival probability (``SwitchingVasicek``, ``SwitchingCoxIngersollRoss``, ``SwitchingVasicekJumps``
 used as intensities). ``discount`` is a flat risk-free rate or a callable ``t -> discount factor``. Protection is
 valued at the mid-point of each accrual period, as QuantLib's ``MidPointCdsEngine``. ``fairSpread()``,
-``couponLegNPV()`` and ``defaultLegNPV()`` are available after ``NPV()``.
+``couponLegNPV()`` and ``defaultLegNPV()`` are available after ``NPV()``. With a callable curve every
+accessor prices again: the curve behind a callable (a relinked QuantLib handle, say) can change without the
+callable changing, so no result is kept. The same holds for a model built on a term structure or a callable.
 
 .. code-block:: python
 

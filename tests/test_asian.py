@@ -26,6 +26,7 @@ def test_geometric_asian_matches_kemna_vorst():
         ours.setPricingEngine(rl.FastSwitchingEngine(model, order=2)); assert ours.NPV() == pytest.approx(o.NPV(), rel=1e-8)
 
 
+@pytest.mark.slow
 def test_geometric_asian_switching_expansion_and_monte_carlo():
     chain = rl.RegimeChain.twoState(12.0, 8.0)
     model = rl.SwitchingBlackScholesProcess(chain, 100.0, 0.03, 0.0, [0.35, 0.15])
