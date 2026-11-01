@@ -10,7 +10,7 @@ from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, Co
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from ._engine.models import stable_B, cir_B
-from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2, SwitchingVarianceGammaProcess
 from .chain import stateIndex
 from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
 from .g2options import g2_zcb_call
@@ -30,7 +30,9 @@ def _noDiffusion(m):
     for p in parts:
         zero = lambda name: not hasattr(p, name) or np.all(np.asarray(getattr(p, name), float) == 0.0)
         if hasattr(p, "nu"):
-            return None                                                  # pure jumps
+            if isinstance(p, SwitchingVarianceGammaProcess) and zero("sigma") and zero("theta"):
+                continue                                                 # the random clock multiplies zero drift and noise
+            return None                                                  # otherwise the gamma clock still creates jumps
         if hasattr(p, "xi"):                                             # Heston with a switching vol-of-vol: the variance
             if not (p.v0 == 0.0 and p.theta == 0.0):                     # stays at zero only from zero with a zero level
                 return None
