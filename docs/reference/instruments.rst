@@ -111,6 +111,11 @@ on the coupon bond struck at par, a payer swaption the put. With ``exerciseTimes
 short-rate grid. Frozen limit: ``JamshidianSwaptionEngine``, ``G2SwaptionEngine``, ``FdHullWhiteSwaptionEngine``,
 ``FdG2SwaptionEngine``.
 
+Maturity and exercise times must be nonnegative, including dates converted relative to the current
+QuantLib evaluation date. Exercise today (time zero) is retained. Seasoned schedules containing past
+exercise opportunities are refused rather than silently removing dates or changing fixed-leg accruals;
+callers must construct the intended remaining contract explicitly.
+
 .. code-block:: python
 
     european = rl.Swaption("payer", 2.0, [3.0, 4.0, 5.0, 6.0, 7.0], 0.035, notional=100.0)

@@ -344,9 +344,16 @@ class Swaption(Instrument):
                 raise ValueError(f"the first exercise time must be the maturity {self.maturity}; got {self.exerciseTimes[0]}")
             if self.exerciseTimes[-1] >= ts[-1]:
                 raise ValueError("every exercise time must be earlier than the last fixed payment")
+        self._validateExerciseTimes()
         cfs = [(t, notional * fixedRate * (t - (ts[i - 1] if i else self.maturity))) for i, t in enumerate(ts)]
         cfs[-1] = (ts[-1], cfs[-1][1] + notional)
         self.cashflows = cfs
+
+    def _validateExerciseTimes(self):
+        # A missed exercise cannot be valued by marching the continuation grid backwards past today.
+        # Removing dates also requires a decision about the remaining swap accruals, so refuse instead.
+        if self.maturity < 0 or any(t < 0 for t in (self.exerciseTimes or [])):
+            raise ValueError("swaption maturity and exercise times must be nonnegative; seasoned schedules are unsupported")
 
 
 class CapFloor(Instrument):
