@@ -84,6 +84,9 @@ class MonteCarloSwitchingEngine:
         elif isinstance(instrument, VanillaOption) and isinstance(m, SwitchingBlackScholesProcess):
             rejectFeatures(instrument, "the Monte Carlo referee", ("American exercise", "a barrier", "geometric averaging"),
                            "SwitchingFDEngine, or NumericalSwitchingEngine for the geometric Asian option")
+            if T == 0.0:                                                      # no path or discounting remains at expiry
+                self.standardError = 0.0
+                return float(instrument.payoffOnGrid([m.S0])[0])
             K, F, disc = instrument.strike, m.forward(T), math.exp(-m.r * T)
             if K <= 0:                                                          # S_T > 0 >= K on every path: no sampling
                 self.standardError = 0.0
