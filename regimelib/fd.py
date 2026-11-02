@@ -99,6 +99,8 @@ class SwitchingFDEngine:
         reveals it (or the regimes coincide) the regime-by-regime solve below is the price under either information
         setting. When it does not, `information="observed"` uses that solve and `information="inferred"` carries the
         belief as a state variable (two regimes, Vasicek or CIR rate options)."""
+        if isinstance(instrument, Swaption):
+            instrument._validateExerciseTimes()
         rate = isinstance(instrument, (Swaption, CouponBondOption, ZeroCouponBondOption, CapFloor))
         acts = rate or getattr(instrument, "isAmerican", False)
         exact = self._withoutAGrid(instrument, rate)                     # deterministic models, and G2 with one live factor
