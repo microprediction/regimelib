@@ -10,7 +10,7 @@ from .instruments import ZeroCouponBond, VanillaOption, ZeroCouponBondOption, Co
 from .bondoptions import coupon_bond_call
 from ._engine.options import zcb_call
 from ._engine.models import stable_B, cir_B
-from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2
+from .models import SwitchingVasicek, SwitchingHullWhite, SwitchingG2, SwitchingMerton76Process
 from .chain import stateIndex
 from .information import startingBelief, checkInformation, regimeIsKnown, byBelief, notRevealed
 from .g2options import g2_zcb_call
@@ -37,7 +37,9 @@ def _noDiffusion(m):
             continue
         if hasattr(p, "v0"):
             return None                                                  # stochastic variance
-        if not (zero("sigma") and zero("eta") and zero("jumpIntensity")):
+        noJumps = zero("jumpIntensity") or (isinstance(p, SwitchingMerton76Process)
+                    and p.logJumpMean == 0.0 and p.logJumpVol == 0.0)     # a unit multiplier leaves the price unchanged
+        if not (zero("sigma") and zero("eta") and noJumps):
             return None
         if isinstance(p, SwitchingVasicek) and len(set(p.b)) > 1 and p.a != 0.0:
             answer = "switching level"
