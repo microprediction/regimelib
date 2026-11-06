@@ -21,7 +21,7 @@ Dedication
 ----------
 
 regimelib is dedicated to Jean-Pierre Fouque, Distinguished Professor of Statistics and Applied Probability at
-UC Santa Barbara, as he retires.
+UC Santa Barbara, as he approaches retirement.
 
 Fouque was instrumental in bringing homogenization and multiscale asymptotics to finance. With George Papanicolaou
 and Ronnie Sircar he priced derivatives by an expansion in the time scale of a fast volatility factor, in *Derivatives
@@ -30,7 +30,7 @@ in *Multiscale Stochastic Volatility for Equity, Interest-Rate and Credit Deriva
 2011). The engine here runs the same kind of expansion. There the fast factor is a mean-reverting volatility process.
 Here it is a finite Markov chain.
 
-The center he co-directs at UC Santa Barbara turns twenty in 2027: :doc:`cfmar`.
+The center he co-directs at UC Santa Barbara turns twenty in 2027: :doc:`Dedication <cfmar>`.
 
 .. code-block:: python
 
@@ -89,7 +89,7 @@ The common formula, the helpers and the index table are on :doc:`models/index`.
 
    background
    certificates
-   cfmar
+   Dedication <cfmar>
 
 .. toctree::
    :maxdepth: 1
