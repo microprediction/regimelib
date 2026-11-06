@@ -14,6 +14,9 @@ Every model has a frozen limit, all regimes equal, in which it is QuantLib's mod
 suite checks that limit against QuantLib's own engine and then checks the switching case against an independent
 referee.
 
+The method and its checks are written up in Cotton (2026), `Security and Derivative Pricing with Fast Regime
+Switches <https://arxiv.org/abs/2611.00466>`_, arXiv:2611.00466.
+
 .. code-block:: python
 
     import regimelib as rl
