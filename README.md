@@ -6,6 +6,8 @@ a finite Markov chain, and the usual instruments are priced under it.
 - **Install:** `pip install regimelib` ([PyPI](https://pypi.org/project/regimelib/))
 - **Documentation:** [regimelib.org](https://regimelib.org). Every model has one page with its mathematics and the
   Python that evaluates it ([model index](https://regimelib.org/models/index.html)).
+- **Paper:** Cotton, P. (2026), *Security and Derivative Pricing with Fast Regime Switches*,
+  [arXiv:2611.00466](https://arxiv.org/abs/2611.00466) [q-fin.MF].
 
 Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it

@@ -9,3 +9,15 @@ date-released: 2026-09-25
 license: MIT
 repository-code: https://github.com/microprediction/regimelib
 url: https://regimelib.org
+preferred-citation:
+  type: article
+  title: "Security and Derivative Pricing with Fast Regime Switches"
+  authors:
+    - family-names: Cotton
+      given-names: Peter
+  year: 2026
+  identifiers:
+    - type: other
+      value: "arXiv:2611.00466"
+  doi: 10.48550/arXiv.2611.00466
+  url: https://arxiv.org/abs/2611.00466
