@@ -14,8 +14,8 @@ a finite Markov chain, and the usual instruments are priced under it.
 regimelib is dedicated to Jean-Pierre Fouque, Distinguished Professor of Statistics and Applied Probability at
 UC Santa Barbara, as he retires.
 
-The engine here prices by an expansion in the time scale of a fast hidden factor. Fouque developed that approach to
-derivatives with George Papanicolaou and Ronnie Sircar in *Derivatives in Financial Markets with Stochastic
+Fouque was instrumental in bringing homogenization and multiscale asymptotics to finance. The engine here prices by
+an expansion in the time scale of a fast hidden factor, and Fouque developed that approach to derivatives with George Papanicolaou and Ronnie Sircar in *Derivatives in Financial Markets with Stochastic
 Volatility* (Cambridge University Press, 2000), and with Knut Sølna in *Multiscale Stochastic Volatility for Equity,
 Interest-Rate and Credit Derivatives* (Cambridge University Press, 2011). There the fast factor is a mean-reverting
 volatility process. Here it is a finite Markov chain.
