@@ -17,6 +17,21 @@ referee.
 The method and its checks are written up in Cotton (2026), `Security and Derivative Pricing with Fast Regime
 Switches <https://arxiv.org/abs/2611.00466>`_, arXiv:2611.00466.
 
+Dedication
+----------
+
+regimelib is dedicated to Jean-Pierre Fouque, Distinguished Professor of Statistics and Applied Probability at
+UC Santa Barbara, as he retires.
+
+Fouque was instrumental in bringing homogenization and multiscale asymptotics to finance. With George Papanicolaou
+and Ronnie Sircar he priced derivatives by an expansion in the time scale of a fast volatility factor, in *Derivatives
+in Financial Markets with Stochastic Volatility* (Cambridge University Press, 2000), and with Knut Sølna extended it
+in *Multiscale Stochastic Volatility for Equity, Interest-Rate and Credit Derivatives* (Cambridge University Press,
+2011). The engine here runs the same kind of expansion. There the fast factor is a mean-reverting volatility process.
+Here it is a finite Markov chain.
+
+The center he co-directs at UC Santa Barbara turns twenty in 2027: :doc:`cfmar`.
+
 .. code-block:: python
 
     import regimelib as rl
@@ -74,6 +89,7 @@ The common formula, the helpers and the index table are on :doc:`models/index`.
 
    background
    certificates
+   cfmar
 
 .. toctree::
    :maxdepth: 1

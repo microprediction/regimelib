@@ -9,6 +9,21 @@ a finite Markov chain, and the usual instruments are priced under it.
 - **Paper:** Cotton, P. (2026), *Security and Derivative Pricing with Fast Regime Switches*,
   [arXiv:2611.00466](https://arxiv.org/abs/2611.00466) [q-fin.MF].
 
+## Dedication
+
+regimelib is dedicated to Jean-Pierre Fouque, Distinguished Professor of Statistics and Applied Probability at
+UC Santa Barbara, as he retires.
+
+Fouque was instrumental in bringing homogenization and multiscale asymptotics to finance. With George Papanicolaou
+and Ronnie Sircar he priced derivatives by an expansion in the time scale of a fast volatility factor, in *Derivatives
+in Financial Markets with Stochastic Volatility* (Cambridge University Press, 2000), and with Knut Sølna extended it
+in *Multiscale Stochastic Volatility for Equity, Interest-Rate and Credit Derivatives* (Cambridge University Press,
+2011). The engine here runs the same kind of expansion. There the fast factor is a mean-reverting volatility process.
+Here it is a finite Markov chain.
+
+The center he co-directs at UC Santa Barbara, CFMAR, turns twenty in 2027:
+[Happy 20th, CFMAR](https://regimelib.org/cfmar.html).
+
 Each class mirrors a QuantLib class and takes the same parameters. The chain can have any number of regimes. A parameter that switches with the regime is
 given as a list, one entry per regime. With every regime equal, each engine reproduces the QuantLib engine it
 mirrors; that is a test (`tests/test_quantlib_limit.py`), checked to about 1e-9.

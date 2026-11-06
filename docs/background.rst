@@ -18,6 +18,12 @@ Green–Kubo integral of the forcing's fluctuation, which is the extra convexity
 layer that remembers the starting regime. Higher orders follow by a recursion the engine runs to any order. The
 series is asymptotic, so the engine stops at the best truncation and says when even that is rough.
 
+The idea of pricing by an expansion in the time scale of a fast hidden factor is the multiscale stochastic
+volatility theory of Fouque, Papanicolaou and Sircar (*Derivatives in Financial Markets with Stochastic Volatility*,
+2000) and of Fouque, Papanicolaou, Sircar and Sølna (*Multiscale Stochastic Volatility for Equity, Interest-Rate and
+Credit Derivatives*, 2011), where the fast factor is a mean-reverting diffusion. A finite chain in its place turns
+the reduced problem into a finite linear system, which is what lets the engine run the recursion to any order.
+
 Two things the library holds itself to:
 
 - **Exact reduction only** in the all-orders tier. A model whose switched operators do not commute with the rest
