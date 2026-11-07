@@ -8,4 +8,4 @@
 /* displayed formulas scroll rather than spill */
 .rst-content div.math, .rst-content .math.notranslate { overflow-x: auto; overflow-y: hidden; }
 
-img.clear { clear: both; display: block; margin-top: 1em; }
+img.clear, .clear { clear: both; display: block; margin-top: 1em; }
