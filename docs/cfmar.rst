@@ -1,6 +1,10 @@
 Jean-Pierre Fouque
 ==================
 
+.. image:: _static/ucsb-campus.jpg
+   :alt: Aerial view of the UC Santa Barbara campus on the Pacific coast
+   :width: 100%
+
 This library is dedicated to Jean-Pierre Fouque as he approaches retirement. He was in many ways the original
 inspiration for it. The timing coincides with the Center for Financial Mathematics and Actuarial Research at UC
 Santa Barbara, which he has co-directed since founding it in 2006, reaching a twenty-year milestone, during which
