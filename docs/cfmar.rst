@@ -7,8 +7,9 @@ Jean-Pierre Fouque
 
 This library is dedicated to Jean-Pierre Fouque as he approaches retirement. He was in many ways the original
 inspiration for it. The timing coincides with the Center for Financial Mathematics and Actuarial Research at UC
-Santa Barbara, which he has co-directed since founding it in 2006, reaching a twenty-year milestone, during which
-time more than forty PhD statisticians, quants and applied mathematicians have been educated there.
+Santa Barbara, which he founded in 2006 and has directed since, with Mike Ludkovski, a founding member, as
+co-director since 2016, reaching a twenty-year milestone, during which time more than forty PhD statisticians,
+quants and applied mathematicians have been educated there.
 
 Fouque took his doctorate at Paris 6 in 1979 under Nicole El Karoui, on the regularity of amarts, and his Doctorat
 d'État in 1986. As a CNRS researcher in Paris and then at the École Polytechnique he worked on stochastic analysis
