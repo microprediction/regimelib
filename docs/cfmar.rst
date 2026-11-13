@@ -61,7 +61,7 @@ extend to all the stochastic volatility work Fouque did, but perhaps someone in 
 that challenge.
 
 The center marked its tenth year with a conference on 19 to 21 May 2017, organized by Fouque and Mike Ludkovski,
-with talks from Daniel Bauer, René Carmona, Peter Carr, Bruno Dupire, Ronnie Sircar and Thaleia Zariphopoulou among
+with talks from Adrian Banner, René Carmona, Peter Carr, Bruno Dupire, Ronnie Sircar and Thaleia Zariphopoulou among
 others. Its work has run from multiscale stochastic volatility to mean field games for systemic risk, stochastic
 portfolio theory, Gaussian process regression for portfolio risk, and Monte Carlo methods for stochastic control.
 
